@@ -1,0 +1,138 @@
+[
+  {
+    "id": "retries",
+    "question": "How are retries handled?",
+    "expected_route": "research",
+    "expected_files": [
+      "adapters.py"
+    ],
+    "expected_keywords": [
+      "retry",
+      "HTTPAdapter"
+    ]
+  },
+  {
+    "id": "retries_paraphrase",
+    "question": "What happens when a request keeps failing?",
+    "expected_route": "research",
+    "expected_files": [
+      "adapters.py"
+    ],
+    "expected_keywords": [
+      "retry"
+    ]
+  },
+  {
+    "id": "cookies",
+    "question": "How does Session persist cookies between requests?",
+    "expected_route": "research",
+    "expected_files": [
+      "sessions.py",
+      "cookies.py"
+    ],
+    "expected_keywords": [
+      "cookie"
+    ]
+  },
+  {
+    "id": "auth",
+    "question": "How is basic authentication added to a request?",
+    "expected_route": "research",
+    "expected_files": [
+      "auth.py"
+    ],
+    "expected_keywords": [
+      "auth"
+    ]
+  },
+  {
+    "id": "redirects",
+    "question": "How does the library decide whether to follow a redirect?",
+    "expected_route": "research",
+    "expected_files": [
+      "sessions.py"
+    ],
+    "expected_keywords": [
+      "redirect"
+    ]
+  },
+  {
+    "id": "timeouts",
+    "question": "What happens if a server does not respond in time?",
+    "expected_route": "research",
+    "expected_files": [
+      "exceptions.py"
+    ],
+    "expected_keywords": [
+      "timeout"
+    ]
+  },
+  {
+    "id": "proxies",
+    "question": "How are HTTP proxies configured for a request?",
+    "expected_route": "research",
+    "expected_files": [
+      "utils.py"
+    ],
+    "expected_keywords": [
+      "proxy"
+    ]
+  },
+  {
+    "id": "ssl",
+    "question": "How is SSL certificate verification controlled?",
+    "expected_route": "research",
+    "expected_files": [
+      "adapters.py",
+      "sessions.py"
+    ],
+    "expected_keywords": [
+      "verify",
+      "ssl",
+      "certificate"
+    ]
+  },
+  {
+    "id": "streaming",
+    "question": "How can a response body be streamed instead of loaded all at once?",
+    "expected_route": "research",
+    "expected_files": [
+      "models.py"
+    ],
+    "expected_keywords": [
+      "stream"
+    ]
+  },
+  {
+    "id": "json_body",
+    "question": "How do I send JSON data in the body of a POST request?",
+    "expected_route": "research",
+    "expected_files": [
+      "models.py",
+      "api.py"
+    ],
+    "expected_keywords": [
+      "json"
+    ]
+  },
+  {
+    "id": "greeting",
+    "question": "hi there!",
+    "expected_route": "chat"
+  },
+  {
+    "id": "thanks",
+    "question": "thanks a lot, that helped",
+    "expected_route": "chat"
+  },
+  {
+    "id": "offtopic_weather",
+    "question": "what's the weather like today?",
+    "expected_route": "chat"
+  },
+  {
+    "id": "offtopic_general",
+    "question": "what's your favorite movie?",
+    "expected_route": "chat"
+  }
+]

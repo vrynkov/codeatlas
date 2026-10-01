@@ -1,0 +1,13 @@
+# For testing the PRODUCTION container locally (not for day-to-day development - use
+# `uvicorn --reload` + `npm run dev` for that, as described in the README).
+services:
+  codeatlas:
+    build: .
+    ports:
+      - "7860:7860"
+    env_file:
+      - backend/.env
+    volumes:
+      - codeatlas-data:/app/backend/data  # keeps indexed repos across container restarts
+volumes:
+  codeatlas-data:

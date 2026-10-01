@@ -1,0 +1,19 @@
+@"
+# Python
+__pycache__/
+*.pyc
+backend/.venv/
+
+# Secrets
+backend/.env
+
+# Generated data (rebuilt by indexing a repo - not something to commit)
+backend/data/
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+
+# OS
+.DS_Store
+"@ | Set-Content -Path .gitignore -Encoding utf8

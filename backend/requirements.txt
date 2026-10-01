@@ -1,0 +1,11 @@
+chromadb
+sentence-transformers
+python-dotenv
+rank-bm25
+langgraph
+langchain-core
+langchain-groq
+mcp>=2,<3
+matplotlib
+fastapi
+uvicorn[standard]
