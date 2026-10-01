@@ -1,25 +1,31 @@
 """Creates the language model(s) CodeAtlas uses, with automatic fallback across a chain of
-Groq models. When the active model's DAILY quota runs out, we switch to the next model in
-the chain and carry on with the same question - no manual .env editing needed mid-run.
+Groq models. Two independent kinds of trouble are handled differently, on purpose:
 
-Which model is "dead" for today is remembered in a small file (data/model_fallback_state.json),
-so restarting a script (a new eval run, a new CLI question) picks up where the last one left
-off instead of wasting a call re-discovering the same exhausted model. The file resets itself
-once the calendar date changes (a simplifying assumption - Groq's real reset may be a rolling
-24h window, not midnight, so this can occasionally be a little optimistic or conservative).
+  - A DAILY quota exhaustion is permanent for the rest of the day no matter how long we wait,
+    so we remember it (in data/model_fallback_state.json, surviving across separate process
+    runs too) and never try that model again today.
+  - A SHORT-lived limit (e.g. a per-minute burst) is NOT a reason to give up on a model for
+    the whole day - a different model's separate per-minute bucket is usually just sitting
+    idle, so we try that instead, right now. This is deliberately NOT persisted: the very next
+    question should still try the original model first, since it likely recovers within
+    seconds to a minute.
+
+Which model actually answered a given call (for reporting - the eval harness, the UI's live
+trace) is tracked separately from which models are confirmed dead for the day, since a
+transient reroute and a permanent one need to be visible differently: a transient one should
+not make every future question start from the rerouted-to model.
 """
 import json
+import os
 import sys
 import time
 from pathlib import Path
 
 from ..config import BACKEND_DIR, GROQ_API_KEY, GROQ_MODEL
-from .rate_limits import is_daily_limit
+from .rate_limits import is_daily_limit, is_rate_limit, suggested_wait
 
 # The account's other real models, in the order to fall back through. GROQ_MODEL (from .env)
 # is always tried first; override the whole chain with GROQ_MODEL_CHAIN="a,b,c" in .env if needed.
-import os  # noqa: E402
-
 _DEFAULT_CHAIN = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
 _env_chain = os.getenv("GROQ_MODEL_CHAIN", "")
 if _env_chain.strip():
@@ -35,6 +41,8 @@ def _today() -> str:
 
 
 def _load_state() -> dict:
+    """Only tracks PERMANENT (daily) exhaustion - "active" is where to START searching from
+    (skip past models already confirmed dead today), "dead" is the confirmed-dead set itself."""
     try:
         data = json.loads(_STATE_FILE.read_text())
         if data.get("date") == _today():
@@ -53,7 +61,10 @@ def _save_state(state: dict) -> None:
         pass  # best-effort only; a failed write just means we might retry a dead model once more
 
 
-_STATE = _load_state()  # shared by every MultiModelChatGroq in this process
+_STATE = _load_state()  # persistent (daily-dead tracking), shared by every instance in this process
+_LAST_USED = {"idx": _STATE["active"]}  # per-call reporting only, NEVER written to disk - a
+                                        # transient reroute updates this so reporting is accurate,
+                                        # but must not redirect where FUTURE calls start from
 
 
 def _make_client(model: str, temperature: float):
@@ -68,9 +79,16 @@ def _make_client(model: str, temperature: float):
 
 class MultiModelChatGroq:
     """Looks and acts like a single LangChain chat model (.invoke(), .bind_tools()) but is
-    really a small pool of them. On a daily-quota error it marks that model dead for today
-    and transparently retries the SAME call on the next one - the caller never sees the error
-    unless every model in the chain is exhausted."""
+    really a small pool of them, falling forward across daily exhaustion AND short-lived
+    per-model limits - see the module docstring for why those two are handled differently."""
+
+    MIN_WAIT_TO_REROUTE = 10  # seconds. Below this, just pause on the SAME model - rerouting
+                              # has a real cost (different models write citations and structure
+                              # answers a little differently; hopping between them repeatedly
+                              # within one question measurably hurt citation consistency in
+                              # testing), so it's only worth paying for waits long enough to matter.
+    MAX_QUICK_RETRIES = 3     # caps same-model short waits so a persistent run of them still
+                              # eventually falls through to rerouting instead of waiting forever.
 
     def __init__(self, models: list[str] | None = None, temperature: float = 0, tools=None):
         self.models = models or MODEL_CHAIN
@@ -84,33 +102,70 @@ class MultiModelChatGroq:
         client = _make_client(self.models[idx], self.temperature)
         return client.bind_tools(self.tools) if self.tools else client
 
+    def _next_viable(self, after_idx: int) -> int | None:
+        """The next index after `after_idx` that isn't already confirmed dead for today."""
+        idx = after_idx + 1
+        while idx < len(self.models) and idx in _STATE["dead"]:
+            idx += 1
+        return idx if idx < len(self.models) else None
+
     def invoke(self, messages, **kwargs):
         last_err = None
-        for idx in range(_STATE["active"], len(self.models)):
+        idx = _STATE["active"]
+        while idx < len(self.models):
             if idx in _STATE["dead"]:
+                idx += 1
                 continue
-            try:
-                result = self._client_for(idx).invoke(messages, **kwargs)
-                if idx != _STATE["active"]:
-                    print(f"[MODEL] now using {self.models[idx]}", file=sys.stderr)
-                    _emit_switch(self.models[idx])
-                _STATE["active"] = idx
-                _save_state(_STATE)
-                return result
-            except Exception as e:  # noqa: BLE001
-                if not is_daily_limit(str(e)):
-                    raise  # not a daily-quota problem (e.g. a per-minute burst) - let the
-                           # caller's own short-wait retry logic (react_agent.py) handle it
-                _STATE["dead"].add(idx)
-                next_idx = idx + 1
-                while next_idx < len(self.models) and next_idx in _STATE["dead"]:
-                    next_idx += 1  # skip any model already known dead, name the real next attempt
-                next_name = self.models[next_idx] if next_idx < len(self.models) else "no more models configured"
-                print(f"[MODEL] {self.models[idx]} exhausted for today; trying the next model {next_name}",
-                      file=sys.stderr)
-                _STATE["active"] = idx + 1
-                _save_state(_STATE)
-                last_err = e
+
+            quick_tries = 0
+            while True:  # may retry THIS SAME idx a bounded number of times before moving on
+                try:
+                    result = self._client_for(idx).invoke(messages, **kwargs)
+                    if idx != _LAST_USED["idx"]:
+                        print(f"[MODEL] now using {self.models[idx]}", file=sys.stderr)
+                        _emit_switch(self.models[idx])
+                    _LAST_USED["idx"] = idx  # for reporting only - see module docstring
+                    return result
+                except Exception as e:  # noqa: BLE001
+                    text = str(e)
+                    daily = is_daily_limit(text)
+                    if not daily and not is_rate_limit(text):
+                        raise  # a real error, not a rate limit - nothing to route around
+
+                    next_idx = self._next_viable(idx)
+                    wait = None if daily else suggested_wait(text)
+                    if (not daily and wait is not None and wait <= self.MIN_WAIT_TO_REROUTE
+                            and quick_tries < self.MAX_QUICK_RETRIES):
+                        quick_tries += 1
+                        print(f"[MODEL] {self.models[idx]} hit a brief limit; waiting {wait:.0f}s "
+                              f"on the same model", file=sys.stderr)
+                        time.sleep(wait)
+                        continue  # inner while True -> correctly retries the SAME idx
+
+                    if daily:
+                        # Confirmed exhausted for the whole day - a dead end no matter how long
+                        # we wait, so this DOES persist (across questions, even across separate
+                        # process runs via the state file): never try this model again today.
+                        _STATE["dead"].add(idx)
+                        _STATE["active"] = idx + 1
+                        _save_state(_STATE)
+                        next_name = self.models[next_idx] if next_idx is not None else "no more models configured"
+                        print(f"[MODEL] {self.models[idx]} exhausted for today; trying the next model {next_name}",
+                              file=sys.stderr)
+                    elif next_idx is not None:
+                        # Short-lived limit worth rerouting for (longer than MIN_WAIT_TO_REROUTE),
+                        # not a daily one - try another model's separate bucket for just this
+                        # call, WITHOUT persisting: next time should still try this model first.
+                        mins = f"{wait:.0f}s" if wait else "a bit"
+                        print(f"[MODEL] {self.models[idx]} hit a short-term limit (retry in ~{mins}); "
+                              f"trying {self.models[next_idx]} for this request instead", file=sys.stderr)
+                    else:
+                        raise  # no other model left to try right now - let react_agent's own
+                               # short-wait-and-retry (or final error) handle this one as before
+                    last_err = e
+                    break  # leave the inner while, the outer while advances to next_idx below
+
+            idx = next_idx if next_idx is not None else len(self.models)
 
         # We get here in two very different situations, and the error must say which one:
         if not self.models:
@@ -128,8 +183,10 @@ class MultiModelChatGroq:
 
 
 def active_model_name() -> str:
-    """Whichever model most recently answered a call, in THIS process. Used for reporting only."""
-    return MODEL_CHAIN[_STATE["active"]] if _STATE["active"] < len(MODEL_CHAIN) else MODEL_CHAIN[-1]
+    """Whichever model most recently answered a call, in THIS process. Used for reporting only -
+    never for deciding where the next call should start searching from (see _STATE for that)."""
+    idx = _LAST_USED["idx"]
+    return MODEL_CHAIN[idx] if idx < len(MODEL_CHAIN) else MODEL_CHAIN[-1]
 
 
 def _emit_switch(model: str) -> None:
