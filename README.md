@@ -104,7 +104,20 @@ python -m eval.make_chart requests        # renders a before/after chart
 
 ### Self-improvement, measured
 
-`compare_lessons.py` runs the same questions twice: once with lessons cleared, once immediately after (so any lessons saved during the first pass are available). One real run showed retries dropping from 20% to 0% and the average Critic score rising from 4.70 to 5.00 — see `eval/results/requests-lesson-comparison.png`.
+`compare_lessons.py` runs the same questions twice: once with lessons cleared, once immediately after (so any lessons saved during the first pass are available). Across four independent runs:
+
+| Run | Critic score | Retry rate | Citation accuracy |
+|---|---|---|---|
+| 1 | 4.70 → 5.00 (better) | 20% → 0% (better) | — |
+| 2 | 5.00 → 4.62 (worse) | 0% → 12% (worse) | worse |
+| 3 | 4.80 → 4.75 (~same) | 10% → 0% (better) | 70% → 100% (better) |
+| 4 | 4.50 → 5.00 (better) | 10% → 0% (better) | 80% → 100% (better) |
+
+Three of four runs show a net positive lean; one shows a net negative one. Chart from Run 4, the most complete recent one:
+
+![Before vs after lessons](backend/eval/results/requests-lesson-comparison.png)
+
+**Honest read:** the mechanism shows a real, if modest, positive lean across repeated testing — but every run shares the same confound (the AFTER pass usually completes fewer questions than BEFORE, since it starts right after BEFORE has already spent part of the day's quota, and the model actually answering sometimes changes mid-comparison as Groq's per-model limits shift). A single same-model, full-sample run under calm conditions is what would actually settle this with confidence. See "Known limitations" below for the specifics behind Run 2's regression.
 
 ## Known limitations (found by actually checking the work, not guessing)
 
@@ -113,11 +126,7 @@ python -m eval.make_chart requests        # renders a before/after chart
 - **Paraphrased questions can get a thinner answer.** The same underlying question asked in different words sometimes leads the Researcher to under-explore compared to the original phrasing, even though the answer given is still accurate.
 - **Free-tier daily token quotas are real and tight.** `openai/gpt-oss-120b` and `openai/gpt-oss-20b` each get a separate 200K-token/day budget on Groq's free tier. CodeAtlas automatically falls back across a chain of models when one is exhausted (`app/agents/llm.py`) and clearly reports the switch, but an eval run split across models mid-run is a real, disclosed constraint of building on free infrastructure, not a hidden one.
 - **Reasoning models have hidden costs.** `openai/gpt-oss-120b` generates internal "thinking" tokens that count against quota even for a trivial prompt — a plain 1-token diagnostic probe is not actually free to run against it.
-- **The self-improvement comparison is currently inconclusive.** `eval/results/requests-lesson-comparison.png` shows a before/after run where lessons produced no improvement, and slightly worse results on two of three metrics:
-
-  ![Before vs after lessons](eval/results/requests-lesson-comparison.png)
-
-  This specific run isn't trustworthy evidence either way: it had a small sample (4 vs. 8 fully-scored questions, since the BEFORE pass hit the daily quota early), a model change mid-experiment (from `gpt-oss-20b` to `qwen-3.8-27b` as the day's quota shifted), and unusually heavy free-tier rate-limiting throughout. A controlled re-test — one model, full sample, run when quota is fresh — is needed before drawing a real conclusion about whether the lessons mechanism helps. Earlier, smaller-scale tests during development (see project history) did show a clear reduction in retries once a lesson existed; this larger run is the one that should be trusted going forward once it's clean.
+- **The self-improvement comparison leans positive but isn't fully consistent (see the table above).** The one net-negative run (Run 2) had a notably small sample (4 vs. 8 fully-scored questions, since the BEFORE pass hit the daily quota early), a model change mid-experiment (`gpt-oss-20b` → `qwen-3.8-27b` as the day's quota shifted), and unusually heavy rate-limiting throughout — real free-tier conditions that make a clean comparison hard, not a flaw specific to that run alone (every run above has some version of this). A controlled re-test — one model, full sample, run when quota is fresh — is the next step toward a confident answer.
 
 ## Project structure
 
