@@ -101,3 +101,19 @@ def repo_source_url(name: str) -> str | None:
         return result.stdout.strip() or None
     except Exception:  # noqa: BLE001  purely cosmetic info - never worth failing a request over
         return None
+
+
+def repo_source_commit(name: str) -> str | None:
+    """The exact commit that was actually indexed, so citation links point at the precise
+    version of the file CodeAtlas read - not whatever the branch has moved to since (the
+    default branch can change between when a repo was indexed and when someone clicks a
+    citation). Returns None if it can't be determined."""
+    try:
+        result = subprocess.run(
+            ["git", "-C", str(REPOS_DIR / name), "rev-parse", "HEAD"],
+            capture_output=True, text=True, timeout=5,
+        )
+        sha = result.stdout.strip()
+        return sha or None
+    except Exception:  # noqa: BLE001  purely cosmetic info - never worth failing a request over
+        return None

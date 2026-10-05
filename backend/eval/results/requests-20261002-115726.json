@@ -1,0 +1,243 @@
+{
+  "summary": {
+    "n_questions": 14,
+    "n_crashed": 0,
+    "models_used": {
+      "openai/gpt-oss-120b": 11,
+      "qwen/qwen3.8-27b": 2,
+      "openai/gpt-oss-20b": 1
+    },
+    "any_model_switch": true,
+    "routing_accuracy": 0.9285714285714286,
+    "n_research": 9,
+    "avg_critic_score": 4.555555555555555,
+    "retry_rate": 0.0,
+    "file_hit_rate": 0.7777777777777778,
+    "file_mention_rate": 1.0,
+    "keyword_hit_rate": 1.0,
+    "errors": 0
+  },
+  "rows": [
+    {
+      "id": "retries",
+      "route_ok": true,
+      "route": "research",
+      "model": "openai/gpt-oss-120b",
+      "model_switched": false,
+      "error": "",
+      "answer": "Retries are handled by delegating to `urllib3`'s `Retry` mechanism, which is configured via the `max_retries` parameter of the `HTTPAdapter`. By default, retries are disabled (`DEFAULT_RETRIES = 0`), but you can enable them by mounting an adapter with a `Retry` object that specifies total attempts and status codes to force a retry on.\n\n**How it works:**\nWhen you create a `Session` and mount an `HTTPAdapter` with `max_retries`, Requests converts this into a `urllib3.util.Retry` object. If a request fails (e.g., connection error or specific HTTP status like 500), `urllib3` automatically retries the request up to the specified limit. If all retries are exhausted, a `RetryError` is raised.\n\nExample:\n```python\nfrom requests import Session, HTTPAdapter\nfrom urllib3.util import Retry\n\ns = Session()\nretries = Retry(total=3, status_forcelist=[500])\ns.mount('http://', HTTPAdapter(max_retries=retries))\n```\n\n**Where to look:**\n*   `src/requests/adapters.py:81` (Default retries set to 0)\n*   `src/requests/adapters.py:208-211` (Logic converting `max_retries` to `Retry` object)\n*   `src/requests/exceptions.py:142-143` (Definition of `RetryError`)\n*   `tests/test_requests.py:2740-2747` (Example usage with `Retry`)",
+      "critic_score": 5,
+      "attempts": 1,
+      "needed_retry": false,
+      "file_hit": true,
+      "file_mentioned": true,
+      "keyword_hit": true,
+      "cited_files": [
+        "adapters.py",
+        "exceptions.py",
+        "test_requests.py"
+      ]
+    },
+    {
+      "id": "retries_paraphrase",
+      "route_ok": true,
+      "route": "research",
+      "model": "openai/gpt-oss-120b",
+      "model_switched": false,
+      "error": "",
+      "answer": "**Answer**  \nWhen a request keeps failing, Requests will retry it only up to the configured `max_retries`. After those attempts are exhausted, the underlying urllib3 raises a `MaxRetryError`, which Requests catches and re\u2011raises as a `requests.exceptions.RetryError` (a subclass of `RequestException`).  \n\n**How it works**  \n1. Each `Session` uses an `HTTPAdapter` that forwards the request to urllib3.  \n2. The adapter is given a `max_retries` value (default or the one you pass).  \n3. urllib3 attempts the request repeatedly until the retry count is reached.  \n4. If the request still fails, urllib3 throws `MaxRetryError`.  \n5. Requests intercepts that exception (see `HTTPAdapter` handling) and raises its own `RetryError`.  \n\n*Tiny example* \u2013 the test below mounts an adapter that allows only two retries for a 500 response; the third failure triggers a `RetryError`:\n\n```python\ndef test_urllib3_retries(httpbin):\n    from urllib3.util import Retry\n    s = requests.Session()\n    s.mount(\"http://\", HTTPAdapter(max_retries=Retry(total=2,\n                                                    status_forcelist=[500])))\n    with pytest.raises(RetryError):\n        s.get(httpbin(\"status/500\"))\n```\n\n**Where to look**  \n- Test demonstrating the raise: `tests/test_requests.py:2740\u20112747`.  \n- Definition of the exception that is finally raised: `src/requests/exceptions.py:142\u2011143` (`class RetryError`).  \n- Adapter\u2019s retry handling (catching `MaxRetryError` and converting it): `src/requests/adapters.py:708\u2011748`.  \n\nThus, a continuously failing request ends with a `requests.exceptions.RetryError` after the configured retry limit is hit.",
+      "critic_score": 5,
+      "attempts": 1,
+      "needed_retry": false,
+      "file_hit": true,
+      "file_mentioned": true,
+      "keyword_hit": true,
+      "cited_files": [
+        "adapters.py",
+        "exceptions.py",
+        "test_requests.py"
+      ]
+    },
+    {
+      "id": "cookies",
+      "route_ok": true,
+      "route": "research",
+      "model": "openai/gpt-oss-120b",
+      "model_switched": false,
+      "error": "",
+      "answer": "**Answer**  \nA `requests.Session` keeps a `RequestsCookieJar` on the instance.  \nAfter each request it pulls any `Set\u2011Cookie` headers into that jar, and when building a new request it merges the jar\u2019s cookies into the outgoing `Cookie` header, so the same cookies are sent on every subsequent call.\n\n**How it works (plain language)**  \n1. When you create a session (`s = requests.Session()`), the constructor runs `self.cookies = cookiejar_from_dict({})` (creates an empty jar).  \n2. When you call `s.get(url, cookies={\u2026})`, `Session.request()` merges the session\u2019s jar with any per\u2011request cookies (`merged_cookies = merge_setting(request.cookies, self.cookies)`).  \n3. The request is sent; `Session.send()` then calls `extract_cookies_to_jar(self.cookies, request, r.raw)` (and for redirects, the same for each history entry). This copies any `Set\u2011Cookie` headers from the response into the jar.  \n4. On the next request, the jar is used to build the `Cookie` header via `get_cookie_header(self.cookies, request)`, so the cookies you just received are automatically sent again.\n\n*Tiny example*  \n```python\ns = requests.Session()\nr1 = s.get('https://httpbin.org/cookies/set?foo=bar')  # server sets cookie foo=bar\nr2 = s.get('https://httpbin.org/cookies')              # session sends foo=bar automatically\n```\n\n**Where to look**  \n- Cookie jar creation: `src/requests/sessions.py:495\u2011554`  \n- Merging cookies into a request: `src/requests/sessions.py:545\u2011604`  \n- Storing response cookies back into the jar: `src/requests/sessions.py:795\u2011854`  \n- Building the Cookie header: `src/requests/cookies.py:153\u2011161` (via `get_cookie_header`).",
+      "critic_score": 4,
+      "attempts": 1,
+      "needed_retry": false,
+      "file_hit": true,
+      "file_mentioned": true,
+      "keyword_hit": true,
+      "cited_files": [
+        "cookies.py",
+        "sessions.py"
+      ]
+    },
+    {
+      "id": "auth",
+      "route_ok": true,
+      "route": "research",
+      "model": "openai/gpt-oss-120b",
+      "model_switched": false,
+      "error": "",
+      "answer": "Basic authentication is added by passing a `(username, password)` tuple to the `auth` parameter, which automatically creates an `HTTPBasicAuth` instance that injects an `Authorization` header into the request.\n\n**How it works:**\nWhen you call a request with `auth=(\"user\", \"pass\")`, the request preparation logic detects the tuple and wraps it in an `HTTPBasicAuth` object. When the request is prepared, the `__call__` method of this object is invoked. It uses the helper function `_basic_auth_str` to encode the credentials: it converts the username and password to bytes, joins them with a colon, base64-encodes the result, and prefixes it with `\"Basic \"`. This string is then set as the value for the `Authorization` header.\n\nFor example:\n```python\nimport requests\n# This implicitly creates HTTPBasicAuth(\"user\", \"pass\")\nresponse = requests.get(\"https://example.com\", auth=(\"user\", \"pass\"))\n# The request will include: Authorization: Basic dXNlcjpwYXNz\n```\n\n**Where to look:**\n*   `src/requests/auth.py:111-113`: The `__call__` method that sets the `Authorization` header.\n*   `src/requests/auth.py:34-75`: The `_basic_auth_str` helper that performs the base64 encoding.\n*   `src/requests/models.py:678-689`: The logic that converts a tuple into an `HTTPBasicAuth` instance.",
+      "critic_score": 4,
+      "attempts": 1,
+      "needed_retry": false,
+      "file_hit": true,
+      "file_mentioned": true,
+      "keyword_hit": true,
+      "cited_files": [
+        "auth.py",
+        "models.py"
+      ]
+    },
+    {
+      "id": "redirects",
+      "route_ok": true,
+      "route": "research",
+      "model": "qwen/qwen3.8-27b",
+      "model_switched": true,
+      "error": "",
+      "answer": "**Direct Answer**\nThe library follows a redirect only if the caller allows it (`allow_redirects=True`), the response has a valid redirect status code (301, 302, 303, 307, or 308) with a `Location` header, and the total number of redirects has not exceeded the session's `max_redirects` limit (default 30).\n\n**How it Works**\nThe decision process begins in `Session.send`, which checks the `allow_redirects` flag. If true, it invokes `resolve_redirects`, a generator that iterates through the redirect chain. Inside this loop, the method `get_redirect_target` is called to determine the next URL; it returns `None` if the status code is not in the `REDIRECT_STATI` tuple or if the `Location` header is missing, which stops the loop. If a valid target is found, the library checks if the current history length exceeds `max_redirects`, raising `TooManyRedirects` if so. Finally, it rebuilds the request (adjusting the HTTP method for 301/302/303 responses to `GET` unless it was a `HEAD` request) and sends the new request with `allow_redirects=False` to prevent infinite recursion.\n\n**Where to look**\n*   `src/requests/sessions.py:795-854`: `Session.send` checks `allow_redirects` and initiates `resolve_redirects`.\n*   `src/requests/sessions.py:186-302`: `resolve_redirects` handles the loop, limit checks, and request rebuilding.\n*   `src/requests/models.py:95-101`: Defines `REDIRECT_STATI` (301, 302, 303, 307, 308).\n*   `src/requests/models.py:103`: Defines `DEFAULT_REDIRECT_LIMIT` as 30.\n*   `src/requests/sessions.py:127-186`: `SessionRedirectMixin` defines the `get_redirect_target` interface.",
+      "critic_score": 4,
+      "attempts": 1,
+      "needed_retry": false,
+      "file_hit": true,
+      "file_mentioned": true,
+      "keyword_hit": true,
+      "cited_files": [
+        "models.py",
+        "sessions.py"
+      ]
+    },
+    {
+      "id": "timeouts",
+      "route_ok": true,
+      "route": "research",
+      "model": "openai/gpt-oss-120b",
+      "model_switched": false,
+      "error": "",
+      "answer": "**Answer**  \nIf the server does not send a response within the specified timeout,\u202f`requests` raises a `Timeout` exception \u2013 more precisely a `ReadTimeout` (a subclass of `Timeout`).  \n\n**How it works**  \nWhen you call `requests.get(..., timeout=2)`, the library starts a timer for the *read* phase (the time between bytes received). If no data arrives before the timer expires, urllib3 signals a timeout and `requests` converts it into a `ReadTimeout` exception. You can catch it with `except requests.exceptions.Timeout` (or `ReadTimeout`). In the test suite, calling `requests.get(httpbin(\"delay/10\"), timeout=2.0)` triggers this exception and the message contains \u201cRead timed out\u201d.  \n\n**Where to look**  \n\n- Test that demonstrates the exception: `tests/test_requests.py` lines\u202f2536\u20112542.  \n- Base `Timeout` class definition: `src/requests/exceptions.py` lines\u202f82\u201188.  \n- `ReadTimeout` subclass (the specific error for a non\u2011responsive server): `src/requests/exceptions.py` lines\u202f98\u201199.  \n- Documentation of the read\u2011timeout behavior: `docs/user/advanced.rst` lines\u202f1101\u20111137.  ",
+      "critic_score": 5,
+      "attempts": 1,
+      "needed_retry": false,
+      "file_hit": true,
+      "file_mentioned": true,
+      "keyword_hit": true,
+      "cited_files": [
+        "advanced.rst",
+        "exceptions.py",
+        "test_requests.py"
+      ]
+    },
+    {
+      "id": "proxies",
+      "route_ok": true,
+      "route": "research",
+      "model": "openai/gpt-oss-20b",
+      "model_switched": true,
+      "error": "",
+      "answer": "**Answer**  \nHTTP proxies are supplied as a dictionary (`proxies`) that maps a scheme (e.g., `\"http\"`, `\"https\"`) or a scheme\u2011plus\u2011host to a proxy URL. The dictionary can be passed to an individual request, stored on a `Session` (`session.proxies`), or taken from the process environment (`http_proxy`, `https_proxy`, `no_proxy`). When a request is made, `requests` merges the explicit dict with any environment proxies (if `trust_env` is true) and then picks the appropriate entry for the request URL.\n\n**How it works**  \n1. In `Session.request` the code checks `self.trust_env`. If true it calls `get_environ_proxies(url, no_proxy)` to read the OS variables, skipping them when the URL matches `NO_PROXY`\u3010src/requests/utils.py\u2020L873-L882\u3011.  \n2. The returned env\u2011proxies are merged into the user\u2011supplied `proxies` dict, keeping existing keys (`proxies.setdefault(k, v)`)\u3010src/requests/sessions.py\u2020L845-L904\u3011.  \n3. Later, `resolve_proxies(request, proxies, trust_env)` (definition shown at lines 911\u2011939) builds the final mapping, applying the same NO_PROXY logic.  \n4. `select_proxy(url, proxies)` extracts the proxy for the URL\u2019s scheme, falling back to an `\"all\"` entry if the hostname is missing\u3010src/requests/utils.py\u2020L885-L908\u3011.  \n5. The selected proxy URL is then used by the underlying `HTTPAdapter` when sending the request.\n\n**Where to look**  \n- `resolve_proxies` \u2013 builds the final proxy map\u3010src/requests/utils.py\u2020L911-L939\u3011  \n- `get_environ_proxies` \u2013 reads environment variables and respects `NO_PROXY`\u3010src/requests/utils.py\u2020L873-L882\u3011  \n- `select_proxy` \u2013 chooses the proxy for a given URL\u3010src/requests/utils.py\u2020L885-L908\u3011  \n- `Session.request` trust\u2011env block \u2013 merges env and user proxies\u3010src/requests/sessions.py\u2020L845-L904\u3011  \n- Documentation warning about env\u2011proxy overriding session proxies\u3010docs/user/advanced.rst\u2020L601-L660\u3011",
+      "critic_score": 5,
+      "attempts": 1,
+      "needed_retry": false,
+      "file_hit": false,
+      "file_mentioned": true,
+      "keyword_hit": true,
+      "cited_files": []
+    },
+    {
+      "id": "ssl",
+      "route_ok": true,
+      "route": "research",
+      "model": "openai/gpt-oss-120b",
+      "model_switched": false,
+      "error": "",
+      "answer": "**Answer**  \nSSL verification is driven by the `verify` argument passed to a request (or session).  \n- `verify=True` (the default) \u2192 Requests tells urllib3 to require a valid server certificate (`cert_reqs = \"CERT_REQUIRED\"`).  \n- `verify=False` \u2192 the requirement is turned off (`cert_reqs = \"CERT_NONE\"`).  \n- `verify` set to a string \u2192 the string is interpreted as a path to a CA bundle or directory and is passed to urllib3 via `ca_certs` / `ca_cert_dir`.\n\n**How it works**  \nWhen a `PreparedRequest` is sent, `HTTPAdapter.send` forwards the `verify` value to `_urllib3_request_context`. That helper builds two dictionaries: `host_params` (scheme/host/port) and `pool_kwargs` (urllib3 connection options). It starts with `cert_reqs = \"CERT_REQUIRED\"` and then:\n\n```python\nif verify is False:\n    cert_reqs = \"CERT_NONE\"\nelif isinstance(verify, str):\n    if not os.path.isdir(verify):\n        pool_kwargs[\"ca_certs\"] = verify      # single bundle file\n    else:\n        pool_kwargs[\"ca_cert_dir\"] = verify   # directory of bundles\npool_kwargs[\"cert_reqs\"] = cert_reqs\n```\n\nThese kwargs are given to urllib3\u2019s `PoolManager`, which enforces (or skips) TLS verification accordingly. The default `verify=True` is defined in `BaseAdapter.send`\u2019s signature.\n\n**Where to look**  \n- `src/requests/adapters.py` \u2013 `_urllib3_request_context` logic (lines\u202f85\u2011119, especially 97\u2011105)\u3010src/requests/adapters.py\u2020L85-L105\u3011  \n- `src/requests/adapters.py` \u2013 `BaseAdapter.send` default `verify=True` (lines\u202f128\u2011135)\u3010src/requests/adapters.py\u2020L128-L135\u3011  \n- Documentation reference: \u201cSSL Cert Verification\u201d section in `docs/user/advanced.rst`\u3010docs/user/advanced.rst\u2020L201-L260\u3011.",
+      "critic_score": 5,
+      "attempts": 1,
+      "needed_retry": false,
+      "file_hit": false,
+      "file_mentioned": true,
+      "keyword_hit": true,
+      "cited_files": []
+    },
+    {
+      "id": "streaming",
+      "route_ok": true,
+      "route": "research",
+      "model": "qwen/qwen3.8-27b",
+      "model_switched": true,
+      "error": "",
+      "answer": "**Answer**  \nUse `stream=True` when making the request and then consume the body with `Response.iter_content()` (or `Response.iter_lines()`). This reads the data chunk\u2011by\u2011chunk from the underlying raw socket instead of loading the whole payload into `Response.content` or `Response.text`.\n\n**How it works**  \nWhen `stream=True` is passed, `requests.Session.request` forwards the flag to the `Response` object, which keeps the HTTP connection open and does **not** call `Response.content` automatically\u3010src/requests/sessions.py:605\u2011607\u3011. The `Response` then exposes a `raw` file\u2011like object; `iter_content()` builds a generator that yields chunks by calling `self.raw.stream(chunk_size, decode_content=True)`\u3010src/requests/models.py:932\u2011991\u3011. If you ask for Unicode strings (`decode_unicode=True`), each byte chunk is passed through `stream_decode_response_unicode`, which incrementally decodes using the response\u2019s charset\u3010src/requests/utils.py:594\u2011610\u3011. `iter_lines()` is a thin wrapper that calls `iter_content()` and splits the incoming data on newlines, letting you process one line at a time\u3010src/requests/models.py:1000\u20111014\u3011. As long as you avoid `Response.content` or `Response.text`, the body is never fully materialised in memory.\n\n**Where to look**  \n- `src/requests/sessions.py:605\u2011607` \u2013 handling of the `stream` argument.  \n- `src/requests/models.py:932\u2011991` \u2013 `iter_content` generator that streams raw chunks.  \n- `src/requests/models.py:950\u2011977` \u2013 fallback reading and chunk slicing logic.  \n- `src/requests/utils.py:594\u2011610` \u2013 incremental Unicode decoding for streamed chunks.  \n- `src/requests/models.py:1000\u20111014` \u2013 `iter_lines` implementation that builds on `iter_content`.",
+      "critic_score": 4,
+      "attempts": 1,
+      "needed_retry": false,
+      "file_hit": true,
+      "file_mentioned": true,
+      "keyword_hit": true,
+      "cited_files": [
+        "models.py",
+        "sessions.py",
+        "utils.py"
+      ]
+    },
+    {
+      "id": "json_body",
+      "route_ok": false,
+      "route": "chat",
+      "model": "openai/gpt-oss-120b",
+      "model_switched": false,
+      "error": "",
+      "answer": "",
+      "critic_score": null,
+      "attempts": 0,
+      "needed_retry": false,
+      "file_hit": false,
+      "file_mentioned": false,
+      "keyword_hit": false,
+      "cited_files": []
+    },
+    {
+      "id": "greeting",
+      "route_ok": true,
+      "route": "chat",
+      "model": "openai/gpt-oss-120b",
+      "model_switched": false,
+      "error": "",
+      "answer": ""
+    },
+    {
+      "id": "thanks",
+      "route_ok": true,
+      "route": "chat",
+      "model": "openai/gpt-oss-120b",
+      "model_switched": false,
+      "error": "",
+      "answer": ""
+    },
+    {
+      "id": "offtopic_weather",
+      "route_ok": true,
+      "route": "chat",
+      "model": "openai/gpt-oss-120b",
+      "model_switched": false,
+      "error": "",
+      "answer": ""
+    },
+    {
+      "id": "offtopic_general",
+      "route_ok": true,
+      "route": "chat",
+      "model": "openai/gpt-oss-120b",
+      "model_switched": false,
+      "error": "",
+      "answer": ""
+    }
+  ]
+}

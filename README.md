@@ -77,7 +77,7 @@ npm run dev
 ```
 Open the URL Vite prints, pick `requests` from the left rail, and ask a question.
 
-**Try the MCP server:**
+**Try the MCP server** (see [`scripts/mcp_client_demo.py`](backend/scripts/mcp_client_demo.py)):
 ```bash
 cd backend
 python scripts/mcp_client_demo.py requests "How are retries handled?"
@@ -121,10 +121,11 @@ Three of four runs show a net positive lean; one shows a net negative one. Chart
 
 ## Known limitations (found by actually checking the work, not guessing)
 
-- **Citation format varies.** The Explainer sometimes writes `file.py lines 123-456` instead of `file.py:123-456`; the eval's extractor was updated to catch both, but a still-rarer "file name and line number separated by unrelated prose" pattern isn't caught. See `eval/harness.py`.
-- **A same-named-method mixup.** In one answer, the agent correctly identified `Session.send` handles the `verify` parameter, but cited a same-named abstract stub method instead of the real implementation ~600 lines later in the same file. Name-based search doesn't disambiguate multiple symbols sharing a name.
+- **Citation format varies.** The Explainer sometimes writes `file.py lines 123-456` instead of `file.py:123-456`; the eval's extractor was updated to catch both, but a still-rarer "file name and line number separated by unrelated prose" pattern isn't caught. See [`eval/harness.py`](backend/eval/harness.py).
+- **A same-named-method mixup.** In one answer, the agent correctly identified `Session.send` handles the `verify` parameter, but cited a same-named abstract stub method instead of the real implementation ~600 lines later in the same file. Name-based search doesn't disambiguate multiple symbols sharing a name. (The [chunker](backend/app/indexing/chunker.py) was later improved to give nested functions and class methods their own clean chunk, which directly helps this case — see the project history.)
+- **Very broad questions can hit a smaller fallback model's output limit.** A wide-open question like "What is this repository?" invites a long, comprehensive answer; on `qwen-3.8-27b` specifically (the last model in the fallback chain, with the tightest per-minute output ceiling of the three), this can exceed its limit and return a clear "try a shorter or more specific question" message rather than an answer. Rephrasing narrower (e.g. "Is RAG used in this repo?") resolves it immediately. See [`app/agents/llm.py`](backend/app/agents/llm.py).
 - **Paraphrased questions can get a thinner answer.** The same underlying question asked in different words sometimes leads the Researcher to under-explore compared to the original phrasing, even though the answer given is still accurate.
-- **Free-tier daily token quotas are real and tight.** `openai/gpt-oss-120b` and `openai/gpt-oss-20b` each get a separate 200K-token/day budget on Groq's free tier. CodeAtlas automatically falls back across a chain of models when one is exhausted (`app/agents/llm.py`) and clearly reports the switch, but an eval run split across models mid-run is a real, disclosed constraint of building on free infrastructure, not a hidden one.
+- **Free-tier daily token quotas are real and tight.** `openai/gpt-oss-120b` and `openai/gpt-oss-20b` each get a separate 200K-token/day budget on Groq's free tier. CodeAtlas automatically falls back across a chain of models when one is exhausted ([`app/agents/llm.py`](backend/app/agents/llm.py)) and clearly reports the switch, but an eval run split across models mid-run is a real, disclosed constraint of building on free infrastructure, not a hidden one.
 - **Reasoning models have hidden costs.** `openai/gpt-oss-120b` generates internal "thinking" tokens that count against quota even for a trivial prompt — a plain 1-token diagnostic probe is not actually free to run against it.
 - **The self-improvement comparison leans positive but isn't fully consistent (see the table above).** The one net-negative run (Run 2) had a notably small sample (4 vs. 8 fully-scored questions, since the BEFORE pass hit the daily quota early), a model change mid-experiment (`gpt-oss-20b` → `qwen-3.8-27b` as the day's quota shifted), and unusually heavy rate-limiting throughout — real free-tier conditions that make a clean comparison hard, not a flaw specific to that run alone (every run above has some version of this). A controlled re-test — one model, full sample, run when quota is fresh — is the next step toward a confident answer.
 
@@ -144,19 +145,31 @@ frontend/
   src/            # React UI: repo picker, chat, live agent trace log
 ```
 
+**Key files, linked for quick navigation** (GitHub won't make the tree above clickable, since it's a code block):
+- [`app/agents/team.py`](backend/app/agents/team.py) — the LangGraph team: Supervisor, Researcher, Explainer, Critic, and the retry loop
+- [`app/agents/react_agent.py`](backend/app/agents/react_agent.py) — the hand-built ReAct loop the Researcher runs
+- [`app/agents/llm.py`](backend/app/agents/llm.py) — automatic model fallback across Groq's daily/short-term rate limits
+- [`app/tools/search.py`](backend/app/tools/search.py) — hybrid (vector + BM25) code search
+- [`app/indexing/chunker.py`](backend/app/indexing/chunker.py) — splits a repo into function/class-level chunks using Python's `ast`
+- [`app/memory/lessons.py`](backend/app/memory/lessons.py) — the self-improvement "lessons" store
+- [`app/mcp_server.py`](backend/app/mcp_server.py) — exposes CodeAtlas as an MCP server
+- [`app/api/routes.py`](backend/app/api/routes.py) — the FastAPI endpoints the React UI calls
+- [`eval/harness.py`](backend/eval/harness.py) and [`eval/run_eval.py`](backend/eval/run_eval.py) — the evaluation scoring logic
+- [`frontend/src/ChatPanel.jsx`](frontend/src/ChatPanel.jsx) — the chat UI, streaming, and Stop button
+
 ## Deployment
 
 **Test the production container locally first:**
 ```bash
 docker compose up --build
 ```
-This builds the React frontend, packages it with the FastAPI backend into one image, and serves everything from `http://localhost:7860`. On first boot it automatically pre-indexes `psf/requests` so there's something to try immediately. You still need `backend/.env` with your `GROQ_API_KEY` — `docker-compose.yml` reads it at container start (it is never baked into the image; see `.dockerignore`).
+This builds the React frontend, packages it with the FastAPI backend into one image (see the [`Dockerfile`](Dockerfile)), and serves everything from `http://localhost:7860`. On first boot, [`docker-entrypoint.sh`](docker-entrypoint.sh) automatically pre-indexes `psf/requests` so there's something to try immediately. You still need a `backend/.env` (copy [`backend/.env.example`](backend/.env.example) and add your `GROQ_API_KEY`) — [`docker-compose.yml`](docker-compose.yml) reads it at container start; it is never baked into the image (see [`.dockerignore`](.dockerignore)).
 
 **Deploy to Hugging Face Spaces (free):**
 1. Create a new Space → SDK: **Docker**.
 2. Push this repo to it (`git remote add space <your-space-git-url>`, `git push space main`).
 3. In the Space's **Settings → Repository secrets**, add `GROQ_API_KEY`.
-4. That's it — Spaces builds the `Dockerfile` automatically and exposes the app on port 7860.
+4. That's it — Spaces builds the [`Dockerfile`](Dockerfile) automatically and exposes the app on port 7860.
 
 **Known constraint:** HF Spaces' free storage is ephemeral — an indexed repo (in `data/`) doesn't survive a Space restart. The entrypoint script re-indexes the demo repo automatically on every fresh boot to work around this; a visitor indexing their own repo will need to re-index if the Space restarts. A persistent volume removes this limitation but isn't part of the free tier.
 

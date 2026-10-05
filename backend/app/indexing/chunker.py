@@ -30,8 +30,26 @@ def _by_lines(lines: list[str], rel: str, kind: str, offset: int = 0) -> list[Ch
     return chunks
 
 
+def _def_chunk(lines: list[str], rel: str, node, kind: str) -> list[Chunk]:
+    """One function/class definition -> one clean chunk (or windowed, only if it's still too
+    long on its own)."""
+    start = min([node.lineno] + [d.lineno for d in node.decorator_list])
+    end = node.end_lineno
+    seg = lines[start - 1 : end]
+    if len(seg) > MAX_CHUNK_LINES:
+        return _by_lines(seg, rel, kind, offset=start - 1)
+    return [Chunk("\n".join(seg), rel, start, end, kind)]
+
+
 def _python(source: str, rel: str) -> list[Chunk]:
-    """Python files: one chunk per function/class (uses Python's built-in `ast`)."""
+    """Python files: one chunk per function/class (uses Python's built-in `ast`) - AND a
+    separate chunk for each definition NESTED inside one, at any depth: a node function
+    defined inside a builder function (a common pattern for LangGraph agent code, including
+    this project's own team.py), or a method inside a class. Without this, a nested definition
+    never gets a clean chunk of its own - if its outer container is too long (a common case:
+    a builder function with several node functions easily exceeds MAX_CHUNK_LINES), it just
+    gets fragmented by the line-window fallback instead, cutting across whatever happened to
+    land in each 60-line window rather than at a meaningful boundary."""
     lines = source.splitlines()
     try:
         tree = ast.parse(source)
@@ -40,15 +58,15 @@ def _python(source: str, rel: str) -> list[Chunk]:
 
     chunks = []
     for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            start = min([node.lineno] + [d.lineno for d in node.decorator_list])
-            end = node.end_lineno
-            kind = "class" if isinstance(node, ast.ClassDef) else "function"
-            seg = lines[start - 1 : end]
-            if len(seg) > MAX_CHUNK_LINES:
-                chunks += _by_lines(seg, rel, kind, offset=start - 1)
-            else:
-                chunks.append(Chunk("\n".join(seg), rel, start, end, kind))
+        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            continue
+        kind = "class" if isinstance(node, ast.ClassDef) else "function"
+        chunks += _def_chunk(lines, rel, node, kind)
+        for inner in ast.walk(node):
+            if inner is node or not isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+                continue
+            inner_kind = "class" if isinstance(inner, ast.ClassDef) else "function"
+            chunks += _def_chunk(lines, rel, inner, inner_kind)
     return chunks or _by_lines(lines, rel, "window")
 
 

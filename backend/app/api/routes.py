@@ -39,8 +39,9 @@ class StopBody(BaseModel):
 
 @router.get("/repos")
 def list_repos() -> list[dict]:
-    from ..indexing.indexer import repo_source_url
-    return [{"name": name, "url": repo_source_url(name)} for name in _indexed_repos()]
+    from ..indexing.indexer import repo_source_commit, repo_source_url
+    return [{"name": name, "url": repo_source_url(name), "commit": repo_source_commit(name)}
+            for name in _indexed_repos()]
 
 
 @router.post("/repos")
@@ -50,7 +51,9 @@ async def add_repo(body: AddRepoBody) -> dict:
     try:
         name, _path = await anyio.to_thread.run_sync(clone_repo, body.url)  # cheap: no-ops if already cloned
         chunks = await anyio.to_thread.run_sync(index_repo, body.url)
-        return {"repo": name, "chunks": chunks}
+        from ..indexing.indexer import repo_source_commit
+        commit = await anyio.to_thread.run_sync(repo_source_commit, name)
+        return {"repo": name, "chunks": chunks, "commit": commit}
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"Could not index that repo: {e}") from e
 

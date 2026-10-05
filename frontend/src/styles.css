@@ -139,6 +139,12 @@ input::placeholder { color: var(--text-dim); }
   border: 1px solid var(--paper-dim);
 }
 .msg.assistant .bubble code { background: rgba(0,0,0,0.06); padding: 1px 4px; border-radius: 2px; }
+.msg.assistant .bubble a.citation-link { text-decoration: none; }
+.msg.assistant .bubble a.citation-link code {
+  color: #8a5a00; /* reads as a link against the parchment bubble, not just more code */
+  background: rgba(200,155,60,0.14);
+}
+.msg.assistant .bubble a.citation-link:hover code { text-decoration: underline; }
 .msg.assistant .bubble pre.code-block {
   background: rgba(0,0,0,0.06);
   border: 1px solid rgba(0,0,0,0.08);

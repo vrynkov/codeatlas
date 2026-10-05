@@ -5,7 +5,7 @@ import TraceLog from "./TraceLog.jsx";
 import { listRepos } from "./api.js";
 
 export default function App() {
-  const [repos, setRepos] = useState([]); // [{name, url}]
+  const [repos, setRepos] = useState([]); // [{name, url, commit}]
   const [activeRepo, setActiveRepo] = useState(null); // just the name, used for identity/API calls
   const [trace, setTrace] = useState([]);
   const [working, setWorking] = useState(false);
@@ -20,12 +20,12 @@ export default function App() {
       .catch(() => setLoadError("Could not reach the CodeAtlas backend. Is it running on :8000?"));
   }, []);
 
-  function handleAdded({ name, url }) {
-    setRepos((r) => (r.some((x) => x.name === name) ? r : [...r, { name, url }]));
+  function handleAdded({ name, url, commit }) {
+    setRepos((r) => (r.some((x) => x.name === name) ? r : [...r, { name, url, commit }]));
     setActiveRepo(name);
   }
 
-  const activeRepoUrl = repos.find((r) => r.name === activeRepo)?.url;
+  const activeRepoEntry = repos.find((r) => r.name === activeRepo);
 
   if (loadError) {
     return (
@@ -40,7 +40,13 @@ export default function App() {
     <div className="shell">
       <RepoRail repos={repos} activeRepo={activeRepo} onSelect={setActiveRepo} onAdded={handleAdded} />
       {activeRepo ? (
-        <ChatPanel repo={activeRepo} repoUrl={activeRepoUrl} onTrace={setTrace} onWorking={setWorking} />
+        <ChatPanel
+          repo={activeRepo}
+          repoUrl={activeRepoEntry?.url}
+          repoCommit={activeRepoEntry?.commit}
+          onTrace={setTrace}
+          onWorking={setWorking}
+        />
       ) : (
         <div className="chat-col">
           <div className="empty-state" style={{ margin: "auto" }}>

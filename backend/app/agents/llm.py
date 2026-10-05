@@ -159,9 +159,23 @@ class MultiModelChatGroq:
                         mins = f"{wait:.0f}s" if wait else "a bit"
                         print(f"[MODEL] {self.models[idx]} hit a short-term limit (retry in ~{mins}); "
                               f"trying {self.models[next_idx]} for this request instead", file=sys.stderr)
+                    elif wait is None:
+                        # No parseable "try again in Xs" - this ISN'T a normal throttle that
+                        # clears with time (e.g. Groq's "request too large for this model's
+                        # per-minute output limit" error: the SAME request will fail identically
+                        # no matter how long we wait on the SAME model). No other model is
+                        # available right now, so say that plainly instead of letting the raw
+                        # Groq JSON reach react_agent's wait-and-retry, which would otherwise
+                        # burn several pointless 20s retries on a request that can never succeed.
+                        raise RuntimeError(
+                            f"{self.models[idx]} couldn't handle this specific request right now "
+                            f"(likely too large for its per-minute output limit), and no other "
+                            f"configured model is available. Try a shorter or more specific question."
+                        ) from e
                     else:
-                        raise  # no other model left to try right now - let react_agent's own
-                               # short-wait-and-retry (or final error) handle this one as before
+                        raise  # a genuine short-term throttle WITH a real wait time, just no
+                               # other model to reroute to - let react_agent's own short-wait-
+                               # and-retry handle it, since waiting here legitimately can help
                     last_err = e
                     break  # leave the inner while, the outer while advances to next_idx below
 

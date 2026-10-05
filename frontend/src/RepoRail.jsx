@@ -12,9 +12,9 @@ export default function RepoRail({ repos, activeRepo, onSelect, onAdded }) {
     setBusy(true);
     setError("");
     try {
-      const { repo } = await addRepo(url.trim());
+      const { repo, commit } = await addRepo(url.trim());
       setUrl("");
-      onAdded({ name: repo, url: url.trim() }); // we already have the URL - no need to re-fetch it
+      onAdded({ name: repo, url: url.trim(), commit }); // URL we already had; commit comes from the response
     } catch (err) {
       setError(err.message);
     } finally {
