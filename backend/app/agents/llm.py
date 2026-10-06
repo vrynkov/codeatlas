@@ -72,9 +72,14 @@ def _make_client(model: str, temperature: float):
     max_retries=0 is deliberate: the underlying SDK retries 429s silently on its own by
     default (2 extra tries, several seconds each), which delayed our OWN fallback logic from
     ever seeing the error. We do our own, smarter retrying/switching in react_agent.py and
-    this file instead, so the SDK shouldn't retry underneath us."""
+    this file instead, so the SDK shouldn't retry underneath us.
+    timeout=120 is also deliberate: the groq SDK's own default read timeout is only 60
+    seconds, which a long, detailed answer to a broad question (especially generated under
+    Cloud Run's single default vCPU) can genuinely exceed - that surfaces as a generic,
+    unhelpful "Connection error.", identically on every attempt, since retrying the same
+    call under the same tight ceiling just hits the same wall again."""
     from langchain_groq import ChatGroq
-    return ChatGroq(model=model, api_key=GROQ_API_KEY, temperature=temperature, max_retries=0)
+    return ChatGroq(model=model, api_key=GROQ_API_KEY, temperature=temperature, max_retries=0, timeout=120)
 
 
 class MultiModelChatGroq:
