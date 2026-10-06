@@ -17,7 +17,7 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from ..config import GROQ_API_KEY, MAX_AGENT_STEPS, MAX_EVIDENCE_CHARS
-from .rate_limits import is_daily_limit, is_rate_limit, suggested_wait
+from .rate_limits import is_connection_error, is_daily_limit, is_rate_limit, suggested_wait
 from ..tools.repo_tools import build_tools
 
 SYSTEM_PROMPT = """You are CodeAtlas, an expert software engineer who answers questions about ONE code repository.
@@ -82,6 +82,10 @@ def invoke_with_recovery(llm_with_tools, messages, tries: int = 3, nudge: str = 
                     print(f"[RECOVER] rate limit hit; waiting {wait or 20:.0f} seconds", file=sys.stderr)
                     time.sleep(wait or 20)
                     continue
+            if is_connection_error(text) and not last:
+                print("[RECOVER] connection hiccup reaching Groq; retrying shortly", file=sys.stderr)
+                time.sleep(3)
+                continue
             raise
 
 

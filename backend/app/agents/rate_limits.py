@@ -15,6 +15,21 @@ def is_rate_limit(text: str) -> bool:
     return "429" in text or "rate_limit" in text
 
 
+def is_connection_error(text: str) -> bool:
+    """A genuine network-level hiccup (DNS, TCP reset, a momentary timeout reaching Groq at
+    all) rather than Groq actually responding with a rate limit or any other real error. We
+    deliberately disabled the SDK's own built-in retries (see llm.py's max_retries=0) so our
+    OWN rate-limit handling would see every 429 immediately instead of it being silently
+    retried away - but that also means an ordinary, one-off connection blip now gets NO retry
+    at all unless we handle it here specifically. Worth a short, cheap retry, not a hard fail."""
+    t = text.lower()
+    return any(s in t for s in (
+        "connection error", "connection reset", "connection aborted", "connection refused",
+        "timed out", "timeout", "temporarily unavailable", "network is unreachable",
+        "name or service not known", "failed to establish a new connection",
+    ))
+
+
 def suggested_wait(text: str) -> float | None:
     m = _WAIT_RE.search(text)
     if not m:
