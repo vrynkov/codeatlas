@@ -11,7 +11,12 @@ FROM python:3.11-slim
 WORKDIR /app/backend
 
 # git is needed at runtime: the indexer clones repos with it.
-RUN apt-get update && apt-get install -y --no-install-recommends git \
+# ca-certificates is needed too: without it, this minimal base image can't verify TLS
+# certificates for ANY outbound HTTPS call (Groq, GitHub, the embedding model download),
+# which fails fast and consistently with a generic "Connection error." on every request -
+# this isn't visible locally, since a normal OS install already has a current cert store.
+RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
+    && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 
 COPY backend/requirements.txt .

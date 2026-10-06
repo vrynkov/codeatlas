@@ -1,6 +1,7 @@
 """The HTTP API the React frontend talks to. Thin wrappers around the same functions the
 CLI, the eval scripts, and the MCP server already use - no logic lives here twice."""
 import json
+import sys
 import uuid
 
 import anyio
@@ -87,6 +88,14 @@ async def ask(repo: str, question: str, request_id: str | None = None) -> Stream
                     break
                 yield f"data: {json.dumps(ev)}\n\n"
         except Exception as e:  # noqa: BLE001  surface the error to the browser instead of hanging
+            # str(e) alone can be a generic, unhelpful single line (e.g. openai/groq's
+            # APIConnectionError defaults to just "Connection error." with no further detail) -
+            # log the real exception TYPE and full traceback server-side so a failure is
+            # actually diagnosable from Cloud Run's logs, not just visible as that one vague
+            # line in the browser.
+            import traceback
+            print(f"[ERROR] {type(e).__name__}: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
             yield f"data: {json.dumps({'agent': 'error', 'type': 'error', 'text': str(e)})}\n\n"
         finally:
             events.close()  # let the underlying agent graph clean up promptly
