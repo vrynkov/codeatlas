@@ -7,7 +7,12 @@ from dotenv import load_dotenv
 BACKEND_DIR = Path(__file__).resolve().parents[1]  # the backend/ folder, wherever we are launched from
 load_dotenv(BACKEND_DIR / ".env")
 
-GROQ_API_KEY = os.getenv("GROQ_API_KEY", "")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
+# .strip() matters here specifically: a trailing newline in a Secret Manager value (easy to
+# introduce accidentally when the secret file was created, e.g. via a text editor that adds
+# one on save) makes the Authorization header itself technically invalid HTTP, which fails
+# INSTANTLY, before any network request is even attempted - surfacing as a generic
+# "Connection error." that's very easy to mistake for an actual connectivity problem.
 # If Groq retires this model, pick another tool-capable one from https://console.groq.com/docs/models
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
