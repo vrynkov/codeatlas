@@ -85,6 +85,22 @@ function renderAnswer(text, repoUrl, repoCommit) {
               <code key={i}>{inner}</code> // older repo, indexed before this feature - no link, same as before
             );
           }
+          // A bare file path with no line numbers at all (e.g. "app/tools/search.py") still gets
+          // linked - just to the file itself, no #Lxx anchor. Requiring a "/" is deliberate: it
+          // safely excludes things that merely LOOK path-like ("Node.js", "e.g.") but aren't
+          // real repo-relative paths, without needing a list of known extensions to check against.
+          if (inner.includes("/") && /^[\w./-]+\.\w{1,4}$/.test(inner)) {
+            const href = repoUrl && repoCommit
+              ? `${repoUrl.replace(/\.git$/, "").replace(/\/$/, "")}/blob/${repoCommit}/${inner}`
+              : null;
+            return href ? (
+              <a key={i} href={href} target="_blank" rel="noreferrer" className="citation-link">
+                <code>{inner}</code>
+              </a>
+            ) : (
+              <code key={i}>{inner}</code>
+            );
+          }
           if (/^`.*`$/.test(p)) {
             return <code key={i}>{p.replace(/`/g, "")}</code>;
           }
