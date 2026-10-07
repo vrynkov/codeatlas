@@ -33,7 +33,12 @@ You receive a QUESTION, the Researcher's FINDINGS, and the EVIDENCE (code the Re
 Write the final answer:
 1. A direct answer in 1-2 sentences.
 2. How it works, in plain language (a tiny example is welcome).
-3. "Where to look": a list of `file:lines` citations.
+3. "Where to look": a list of citations. Every citation MUST include the full relative file
+   path, in exactly this form: `path/to/file.py:12-34` (one number for a single line, two
+   joined by a hyphen for a range). NEVER cite just a function or class name alone (e.g.
+   `chunk_repo (lines 88-98)` is WRONG - it names no file at all) - always the real path, even
+   when the question is specifically about one function and naming it feels natural; say
+   "In `chunk_repo` (`app/indexing/chunker.py:88-98`), ..." if you want to name the function too.
 Use ONLY facts found in FINDINGS or EVIDENCE. If evidence is thin, say so. Stay under about 250 words."""
 
 CRITIC_PROMPT = """[ROLE:CRITIC]
