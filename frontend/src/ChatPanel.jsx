@@ -25,6 +25,14 @@ const KNOWN_FILE_EXTENSIONS = new Set([
 // Some models emit a file-citation marker like 【README.md†L9-L13】 as literal visible text
 // (an OpenAI-style retrieval citation annotation) instead of it being specially rendered.
 // This normalizes it into the "`file:N-M`" form the rest of renderAnswer already understands.
+// A bracket citation with a bare NUMBER instead of a real filename (e.g. "【0†L1-L6】") is an
+// unresolved internal reference index leaking through as literal text, not an actual file path
+// - there's genuinely nothing to link to, so the best outcome is removing it cleanly rather
+// than showing cryptic symbols or attempting a broken link.
+function stripUnresolvedBracketCitations(text) {
+  return text.replace(/\s*【\d+†L\d+(?:[-\u2011\u2013\u2014]L\d+)?】/g, "");
+}
+
 function normalizeBracketCitations(text) {
   return text.replace(
     /【([\w ./-]+\.\w{1,4})†L(\d+)(?:[-\u2011\u2013\u2014]L(\d+))?】/g,
@@ -84,6 +92,7 @@ function normalizeImplicitFileCitations(text) {
 }
 
 function renderAnswer(text, repoUrl, repoCommit) {
+  text = stripUnresolvedBracketCitations(text);
   text = normalizeBracketCitations(text);
   text = normalizeMultiRangeCitations(text);
   text = normalizeLinesBeforeFileCitations(text);
