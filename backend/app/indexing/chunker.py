@@ -85,6 +85,25 @@ def chunk_file(path: Path, root: Path) -> list[Chunk]:
     return _by_lines(source.splitlines(), rel, "window")
 
 
+def scan_repo(root: Path) -> dict:
+    """A fast, read-only preview of what chunk_repo would process - same filters (skip-dirs,
+    supported extensions, size cap), but just counts files and bytes instead of reading and
+    chunking them. Used to show the user what's about to happen (file count, total size)
+    before the slow embedding step actually starts."""
+    file_count, total_bytes = 0, 0
+    for path in root.rglob("*"):
+        if not path.is_file() or any(p in SKIP_DIRS for p in path.parts):
+            continue
+        if path.suffix not in CODE_EXTS | DOC_EXTS:
+            continue
+        size = path.stat().st_size
+        if size > MAX_FILE_BYTES:
+            continue
+        file_count += 1
+        total_bytes += size
+    return {"file_count": file_count, "total_bytes": total_bytes}
+
+
 def chunk_repo(root: Path) -> list[Chunk]:
     chunks = []
     for path in sorted(root.rglob("*")):

@@ -5,12 +5,12 @@ import sys
 import uuid
 
 import anyio
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..agents.team import run_team, submit_feedback
-from ..indexing.indexer import clone_repo, index_repo
+from ..indexing.indexer import get_progress, start_indexing_job
 from ..mcp_server import _indexed_repos  # the same "which repos exist" logic, reused here
 
 router = APIRouter(prefix="/api")
@@ -46,17 +46,39 @@ def list_repos() -> list[dict]:
 
 
 @router.post("/repos")
-async def add_repo(body: AddRepoBody) -> dict:
-    """Clones + indexes a repo. Runs the (slow, CPU-bound) indexer in a worker thread so it
-    doesn't block other requests while it works."""
+async def add_repo(body: AddRepoBody, background_tasks: BackgroundTasks) -> dict:
+    """Clones, scans, and chunks a repo (all fast - no embedding model involved yet), then
+    returns IMMEDIATELY with enough info for the UI to show a real "indexing..." state (file
+    count, size, a rough time estimate) - rather than one long blocking request with zero
+    feedback. The genuinely slow part (embedding every chunk) runs afterward in the
+    background; the frontend polls GET /repos/{name}/index-status for live progress."""
     try:
-        name, _path = await anyio.to_thread.run_sync(clone_repo, body.url)  # cheap: no-ops if already cloned
-        chunks = await anyio.to_thread.run_sync(index_repo, body.url)
-        from ..indexing.indexer import repo_source_commit
-        commit = await anyio.to_thread.run_sync(repo_source_commit, name)
-        return {"repo": name, "chunks": chunks, "commit": commit}
+        job = await anyio.to_thread.run_sync(start_indexing_job, body.url)
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"Could not index that repo: {e}") from e
+    background_tasks.add_task(job["work"])
+    return {
+        "repo": job["name"],
+        "file_count": job["file_count"],
+        "total_bytes": job["total_bytes"],
+        "chunks_total": job["chunks_total"],
+        "estimated_seconds": job["estimated_seconds"],
+    }
+
+
+@router.get("/repos/{name}/index-status")
+def index_status(name: str) -> dict:
+    """Polled by the frontend while a repo is indexing, to show live progress - which chunk
+    batch has been embedded so far, and the final commit/url once the background job finishes."""
+    progress = get_progress(name)
+    if progress is None:
+        raise HTTPException(404, f"No indexing job found for '{name}'.")
+    result = dict(progress)
+    if result["stage"] == "done":
+        from ..indexing.indexer import repo_source_commit, repo_source_url
+        result["url"] = repo_source_url(name)
+        result["commit"] = repo_source_commit(name)
+    return result
 
 
 @router.get("/ask")

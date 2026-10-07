@@ -18,6 +18,19 @@ export async function addRepo(url) {
   return data;
 }
 
+export async function getIndexStatus(name) {
+  const r = await fetch(`${BASE}/repos/${encodeURIComponent(name)}/index-status`);
+  if (!r.ok) {
+    // .status is attached so the caller can tell a 404 ("this job genuinely doesn't exist,
+    // e.g. the backend restarted mid-indexing") apart from a transient network blip - retrying
+    // forever makes sense for the latter, but never resolves the former.
+    const err = new Error("Could not check indexing status");
+    err.status = r.status;
+    throw err;
+  }
+  return r.json(); // {stage, file_count, total_bytes, chunks_total, chunks_done, estimated_seconds, url?, commit?}
+}
+
 export function sendFeedback(repo, question, files, helpful) {
   return fetch(`${BASE}/feedback`, {
     method: "POST",

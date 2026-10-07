@@ -177,6 +177,42 @@ input::placeholder { color: var(--text-dim); }
 }
 .empty-state h2 { color: var(--text); margin-bottom: 8px; }
 
+/* ---- Indexing progress view (shown in place of chat while a repo is being indexed) ---- */
+.indexing-view {
+  margin: auto;
+  text-align: center;
+  color: var(--text-dim);
+  max-width: 420px;
+}
+.indexing-view h2 { color: var(--text); margin: 16px 0 6px; font-size: 18px; word-break: break-all; }
+.indexing-stats { margin: 2px 0; font-size: 14px; }
+.circular-progress { display: block; margin: 0 auto; }
+.circular-progress .track { stroke: var(--ink-3); }
+.circular-progress .indicator {
+  stroke: var(--gold);
+  transition: stroke-dashoffset 0.4s ease;
+}
+.circular-progress .percent-text {
+  fill: var(--text);
+  font-size: 18px;
+  font-weight: 600;
+}
+.circular-progress.indeterminate { animation: spin 1.1s linear infinite; }
+.circular-progress.indeterminate .indicator { stroke: var(--teal); }
+@keyframes spin { to { transform: rotate(360deg); } }
+
+/* ---- "The team is investigating..." indicator, shown inline while waiting for an answer ---- */
+.thinking-bubble { display: flex; align-items: center; gap: 10px; color: var(--text-dim); }
+.thinking-bubble .spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid var(--ink-3);
+  border-top-color: var(--gold);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
 /* ---- Field log (right column): live agent trace ---- */
 .log-entry {
   border-left: 2px solid var(--line);
