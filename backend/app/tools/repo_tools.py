@@ -25,8 +25,12 @@ def build_tools(repo_name: str):
         out = []
         for r in results:
             m = r["meta"]
-            preview = "\n".join(r["text"].splitlines()[1:12])  # skip the '# File:' header line
-            out.append(f"--- {m['file']} (lines {m['start_line']}-{m['end_line']}, {m['kind']})\n{preview}")
+            # Drop the '# File:'/'# Symbol:' header lines we added at index time; show the code.
+            body = [ln for ln in r["text"].splitlines() if not ln.startswith(("# File:", "# Symbol:"))]
+            preview = "\n".join(body[:11])
+            name = m.get("name") or ""
+            label = f" {name}" if name else ""  # e.g. " Session.send", so the agent cites the right one
+            out.append(f"--- {m['file']} (lines {m['start_line']}-{m['end_line']}, {m['kind']}{label})\n{preview}")
         return ("\n\n".join(out) or "No results.")[:MAX_TOOL_OUTPUT_CHARS]
 
     @tool

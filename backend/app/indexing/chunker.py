@@ -18,27 +18,30 @@ class Chunk:
     start_line: int
     end_line: int
     kind: str  # function | class | window | doc
+    name: str = ""  # qualified name, e.g. "Session.send" - "" for window/doc chunks. This is
+                    # what lets search tell two same-named functions apart (Session.send vs
+                    # BaseAdapter.send), which otherwise look identical and get mis-cited.
 
 
-def _by_lines(lines: list[str], rel: str, kind: str, offset: int = 0) -> list[Chunk]:
+def _by_lines(lines: list[str], rel: str, kind: str, offset: int = 0, name: str = "") -> list[Chunk]:
     """Simple fallback: cut into overlapping windows of lines."""
     chunks, i = [], 0
     while i < len(lines):
         part = lines[i : i + WINDOW]
-        chunks.append(Chunk("\n".join(part), rel, offset + i + 1, offset + i + len(part), kind))
+        chunks.append(Chunk("\n".join(part), rel, offset + i + 1, offset + i + len(part), kind, name))
         i += WINDOW - OVERLAP
     return chunks
 
 
-def _def_chunk(lines: list[str], rel: str, node, kind: str) -> list[Chunk]:
+def _def_chunk(lines: list[str], rel: str, node, kind: str, name: str) -> list[Chunk]:
     """One function/class definition -> one clean chunk (or windowed, only if it's still too
-    long on its own)."""
+    long on its own). `name` is the qualified name, e.g. "Session.send"."""
     start = min([node.lineno] + [d.lineno for d in node.decorator_list])
     end = node.end_lineno
     seg = lines[start - 1 : end]
     if len(seg) > MAX_CHUNK_LINES:
-        return _by_lines(seg, rel, kind, offset=start - 1)
-    return [Chunk("\n".join(seg), rel, start, end, kind)]
+        return _by_lines(seg, rel, kind, offset=start - 1, name=name)
+    return [Chunk("\n".join(seg), rel, start, end, kind, name)]
 
 
 def _python(source: str, rel: str) -> list[Chunk]:
@@ -49,24 +52,36 @@ def _python(source: str, rel: str) -> list[Chunk]:
     never gets a clean chunk of its own - if its outer container is too long (a common case:
     a builder function with several node functions easily exceeds MAX_CHUNK_LINES), it just
     gets fragmented by the line-window fallback instead, cutting across whatever happened to
-    land in each 60-line window rather than at a meaningful boundary."""
+    land in each 60-line window rather than at a meaningful boundary.
+
+    Each chunk also records its QUALIFIED name - the parent path joined with dots, e.g. a
+    method `send` inside class `Session` becomes "Session.send". Two functions sharing a
+    short name ("send") then look different to search, which is what fixes the wrong-citation
+    case where the real Session.send and an unrelated BaseAdapter.send were indistinguishable."""
     lines = source.splitlines()
     try:
         tree = ast.parse(source)
     except SyntaxError:
         return _by_lines(lines, rel, "window")
 
-    chunks = []
-    for node in tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            continue
-        kind = "class" if isinstance(node, ast.ClassDef) else "function"
-        chunks += _def_chunk(lines, rel, node, kind)
-        for inner in ast.walk(node):
-            if inner is node or not isinstance(inner, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-                continue
-            inner_kind = "class" if isinstance(inner, ast.ClassDef) else "function"
-            chunks += _def_chunk(lines, rel, inner, inner_kind)
+    DEF_TYPES = (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)
+
+    def collect(node, prefix: str) -> list[Chunk]:
+        """Walk the tree; build the dotted name as we descend into each function/class. We
+        recurse through EVERY child (not just defs) so a function nested inside an `if`/`for`
+        is still found, but the name prefix only grows when we actually enter a def/class."""
+        out = []
+        for child in ast.iter_child_nodes(node):
+            if isinstance(child, DEF_TYPES):
+                kind = "class" if isinstance(child, ast.ClassDef) else "function"
+                qualified = f"{prefix}{child.name}"
+                out += _def_chunk(lines, rel, child, kind, qualified)
+                out += collect(child, f"{qualified}.")  # descend, extending the name
+            else:
+                out += collect(child, prefix)  # not a def - keep the same name prefix
+        return out
+
+    chunks = collect(tree, "")
     return chunks or _by_lines(lines, rel, "window")
 
 

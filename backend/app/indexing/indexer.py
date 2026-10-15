@@ -5,6 +5,7 @@ Run from the backend/ folder:
     python -m app.indexing.indexer search requests "how are retries handled?"
 """
 import re
+import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -60,9 +61,33 @@ def clone_repo(url: str) -> tuple[str, Path]:
     name = url.rstrip("/").split("/")[-1].removesuffix(".git")
     dest = REPOS_DIR / name
     if not dest.exists():
+        # First time: download a fresh copy.
         REPOS_DIR.mkdir(parents=True, exist_ok=True)
         subprocess.run(["git", "clone", "--depth", "1", url, str(dest)], check=True)
+    else:
+        # Already on disk: refresh it so re-indexing sees the latest commit, instead of
+        # silently re-embedding the stale copy. We use fetch + `reset --hard` rather than
+        # `git pull` because this is a shallow (--depth 1) clone, where a plain pull can
+        # refuse to merge; reset forces the working tree to match the fetched commit.
+        # If anything goes wrong (corrupted folder, rewritten history), fall back to a
+        # clean re-clone so a broken copy can't get permanently stuck.
+        try:
+            subprocess.run(["git", "-C", str(dest), "fetch", "--depth", "1", "origin"], check=True)
+            subprocess.run(["git", "-C", str(dest), "reset", "--hard", "origin/HEAD"], check=True)
+        except subprocess.CalledProcessError:
+            shutil.rmtree(dest, ignore_errors=True)
+            subprocess.run(["git", "clone", "--depth", "1", url, str(dest)], check=True)
     return name, dest
+
+
+def _document_for(c) -> str:
+    """The text we actually embed and keyword-search for one chunk: the file path, the
+    qualified symbol name when there is one, then the code itself. Including the name here is
+    what lets search distinguish two functions that share a short name."""
+    header = f"# File: {c.file}"
+    if c.name:
+        header += f"\n# Symbol: {c.name}"
+    return f"{header}\n{c.text}"
 
 
 def _embed_and_store(name: str, chunks: list, progress: dict | None = None) -> int:
@@ -91,9 +116,12 @@ def _embed_and_store(name: str, chunks: list, progress: dict | None = None) -> i
         batch = chunks[i : i + B]
         col.add(
             ids=[f"{c.file}:{c.start_line}-{c.end_line}:{i + j}" for j, c in enumerate(batch)],
-            documents=[f"# File: {c.file}\n{c.text}" for c in batch],  # file path helps search
+            # The file path AND the qualified symbol name (e.g. "Session.send") go into the
+            # searchable text, so a query can land on the RIGHT one of two same-named functions.
+            documents=[_document_for(c) for c in batch],
             metadatas=[
-                {"file": c.file, "start_line": c.start_line, "end_line": c.end_line, "kind": c.kind}
+                {"file": c.file, "start_line": c.start_line, "end_line": c.end_line,
+                 "kind": c.kind, "name": c.name}
                 for c in batch
             ],
         )
@@ -101,6 +129,13 @@ def _embed_and_store(name: str, chunks: list, progress: dict | None = None) -> i
         print(f"  {done}/{len(chunks)}")
         if progress is not None:
             progress["chunks_done"] = done
+
+    # We just rebuilt this repo's search index. A searcher cached from the OLD index is now
+    # stale (it points at the collection we deleted above), so drop the cache - the next
+    # question rebuilds a fresh searcher against the new index. Imported here, not at module
+    # top, to avoid a circular import (search.py imports from this module).
+    from ..tools.search import get_searcher
+    get_searcher.cache_clear()
     return len(chunks)
 
 
