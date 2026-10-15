@@ -35,11 +35,14 @@ Write the final answer:
 2. How it works, in plain language (a tiny example is welcome).
 3. "Where to look": a list of citations.
 Whenever you mention a specific function, class, or line of code - in EITHER section 2 or
-section 3, not just "Where to look" - cite it with the full relative file path, in exactly this
-form: `path/to/file.py:12-34` (one number for a single line, two joined by a hyphen for a
-range). NEVER cite just a function or class name alone (e.g. `chunk_repo (lines 88-98)` is
-WRONG - it names no file at all) - always the real path, even when naming the function too
-feels natural: say "In `chunk_repo` (`app/indexing/chunker.py:88-98`), ..." instead.
+section 3, not just "Where to look" - cite it with the file path copied EXACTLY as it appears
+in the FINDINGS/EVIDENCE headers (the `--- path/to/file.py (lines ...)` lines), in this form:
+`path/to/file.py:12-34` (one number for a single line, two joined by a hyphen for a range).
+Copy the path verbatim - do NOT shorten it or drop any leading folder such as `backend/`, and
+do NOT use a path from prose or the README if it differs from the path in the evidence. NEVER
+cite just a function or class name alone (e.g. `chunk_repo (lines 88-98)` is WRONG - it names
+no file at all) - always the real path, even when naming the function too feels natural: say
+"In `chunk_repo` (`backend/app/indexing/chunker.py:88-98`), ..." instead.
 Use ONLY facts found in FINDINGS or EVIDENCE. If evidence is thin, say so. Stay under about 250 words."""
 
 CRITIC_PROMPT = """[ROLE:CRITIC]
