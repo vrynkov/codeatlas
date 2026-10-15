@@ -65,18 +65,30 @@ def _evidence_text(evidence: list) -> str:
     return "\n\n".join(evidence)[:MAX_EVIDENCE_CHARS]
 
 
-# Matches a citation like `app/tools/search.py:88-98` (one line, or a range joined by a hyphen
-# or a unicode dash). The path part is captured so we can check and fix it below.
-_CITATION = re.compile(r"(?P<path>[\w.\-/]+\.\w{1,4}):(?P<lines>\d+(?:[-‑–—]\d+)?)")
+# A citation WITH line numbers, e.g. app/tools/search.py:88-98 (a single line, or a range joined
+# by a hyphen or a unicode dash), optionally wrapped in a pair of backticks. The backticks are
+# captured (lb/rb) so a real file keeps them, while an invented one can be stripped to plain text.
+# The path class has NO space on purpose - it mirrors the UI, which only treats a space-free token
+# as a citation in prose; allowing spaces here would let the match swallow the words before it.
+_CITATION = re.compile(
+    r"(?P<lb>`?)(?P<path>[\w.\-/]+\.\w{1,4}):(?P<lines>\d+(?:[-‑–—]\d+)?)(?P<rb>`?)"
+)
+# A bare file path (no line numbers) wrapped in backticks, e.g. `app/tools/search.py`. The UI links
+# these to the file too, so an invented one has to be unwrapped to plain, non-clickable text.
+_BACKTICK_PATH = re.compile(r"`(?P<path>[\w .\-/]+\.\w{1,4})`")
 
 
 def _fix_citation_paths(text: str, repo_name: str) -> str:
-    """The Explainer sometimes cites a file by a shortened path (e.g. `app/tools/search.py`,
-    copied from the README or prose) instead of the real indexed path (`backend/app/tools/search.py`).
-    The shorter path then 404s when the UI turns it into a GitHub link. We already know every real
-    file path we indexed, so we fix each citation deterministically here: if the cited path wasn't
-    indexed but exactly one indexed file ends with it, rewrite it to that real path. Done in code
-    (not just the prompt) because free models don't reliably obey a "copy the path verbatim" rule."""
+    """Make every citation in the answer either a link to a REAL file or no link at all - never a
+    broken link. We know every file path we indexed, so for each citation we:
+      * keep it if the path is already a real indexed file;
+      * rewrite it if the model shortened a real path (e.g. `app/tools/search.py` ->
+        `backend/app/tools/search.py`) and exactly one indexed file ends with it;
+      * otherwise turn it into plain text (drop the line numbers AND the backticks) so the UI
+        does NOT make a link out of it. This last case covers a path the model simply invented
+        for an illustration (e.g. `backend/app/auth/login.py`, a file that doesn't exist) - the
+        reader still sees the path, it just isn't a clickable 404.
+    Done in code, not the prompt, because free models don't reliably obey "only cite real files"."""
     try:
         from ..tools.search import get_searcher
         real = {m["file"] for m in get_searcher(repo_name).metas}
@@ -86,17 +98,24 @@ def _fix_citation_paths(text: str, repo_name: str) -> str:
         return text
 
     def resolve(cited: str) -> str | None:
+        """The real indexed path for a cited path, or None when we can't be sure of exactly one."""
         if cited in real:
-            return None  # already the real path: leave it alone
-        # A unique indexed file whose path ends with the cited (shorter) path, on a / boundary.
+            return cited
         matches = [p for p in real if p.endswith("/" + cited)]
         return matches[0] if len(matches) == 1 else None
 
-    def replace(m: "re.Match") -> str:
-        fixed = resolve(m.group("path"))
-        return f"{fixed}:{m.group('lines')}" if fixed else m.group(0)
+    def fix_with_lines(m: "re.Match") -> str:
+        real_path = resolve(m.group("path"))
+        if real_path:  # real file: keep it a link, with whatever backticks it had
+            return f"{m.group('lb')}{real_path}:{m.group('lines')}{m.group('rb')}"
+        return m.group("path")  # invented/ambiguous: plain text, no backticks, no :line -> no link
 
-    return _CITATION.sub(replace, text)
+    def fix_bare(m: "re.Match") -> str:
+        real_path = resolve(m.group("path"))
+        return f"`{real_path}`" if real_path else m.group("path")
+
+    text = _CITATION.sub(fix_with_lines, text)       # citations with line numbers
+    return _BACKTICK_PATH.sub(fix_bare, text)        # then bare `path` links the UI would also make
 
 
 # ---------- the graph ----------
