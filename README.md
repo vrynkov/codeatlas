@@ -157,7 +157,7 @@ frontend/
 - [`eval/harness.py`](backend/eval/harness.py) and [`eval/run_eval.py`](backend/eval/run_eval.py) — the evaluation scoring logic
 - [`frontend/src/ChatPanel.jsx`](frontend/src/ChatPanel.jsx) — the chat UI, streaming, and Stop button
 
-## Deployment
+## Running with Docker
 
 **Test the production container locally first:**
 ```bash
@@ -165,9 +165,9 @@ docker compose up --build
 ```
 This builds the React frontend, packages it with the FastAPI backend into one image (see the [`Dockerfile`](Dockerfile)), and serves everything from `http://localhost:7860`. On first boot, [`docker-entrypoint.sh`](docker-entrypoint.sh) automatically pre-indexes `psf/requests` so there's something to try immediately. You still need a `backend/.env` (copy [`backend/.env.example`](backend/.env.example) and add your `GROQ_API_KEY`) — [`docker-compose.yml`](docker-compose.yml) reads it at container start; it is never baked into the image (see [`.dockerignore`](.dockerignore)).
 
-## Deployment
+## Deployment (Google Cloud Run)
 
-CodeAtlas is deployed on **Google Cloud Run**: [live demo](https://codeatlas-705750337383.us-central1.run.app)
+CodeAtlas is deployed on **Google Cloud Run**: [live demo ↗](https://codeatlas-705750337383.us-central1.run.app)
 
 ### Deploy it yourself
 
