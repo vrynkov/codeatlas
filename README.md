@@ -165,13 +165,41 @@ docker compose up --build
 ```
 This builds the React frontend, packages it with the FastAPI backend into one image (see the [`Dockerfile`](Dockerfile)), and serves everything from `http://localhost:7860`. On first boot, [`docker-entrypoint.sh`](docker-entrypoint.sh) automatically pre-indexes `psf/requests` so there's something to try immediately. You still need a `backend/.env` (copy [`backend/.env.example`](backend/.env.example) and add your `GROQ_API_KEY`) — [`docker-compose.yml`](docker-compose.yml) reads it at container start; it is never baked into the image (see [`.dockerignore`](.dockerignore)).
 
-**Deploy to Hugging Face Spaces (free):**
-1. Create a new Space → SDK: **Docker**.
-2. Push this repo to it (`git remote add space <your-space-git-url>`, `git push space main`).
-3. In the Space's **Settings → Repository secrets**, add `GROQ_API_KEY`.
-4. That's it — Spaces builds the [`Dockerfile`](Dockerfile) automatically and exposes the app on port 7860.
+## Deployment
 
-**Known constraint:** HF Spaces' free storage is ephemeral — an indexed repo (in `data/`) doesn't survive a Space restart. The entrypoint script re-indexes the demo repo automatically on every fresh boot to work around this; a visitor indexing their own repo will need to re-index if the Space restarts. A persistent volume removes this limitation but isn't part of the free tier.
+CodeAtlas is deployed on **Google Cloud Run**: [live demo](https://codeatlas-705750337383.us-central1.run.app)
+
+### Deploy it yourself
+
+1. **Enable the required APIs** (one-time, per GCP project):
+```bash
+gcloud services enable run.googleapis.com cloudbuild.googleapis.com
+```
+2. **Store your Groq API key as a secret:**
+```bash
+gcloud secrets create groq-api-key --data-file="path\to\your\key.txt"
+gcloud secrets add-iam-policy-binding groq-api-key
+--member="serviceAccount:YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+--role="roles/secretmanager.secretAccessor"
+```
+3. **Deploy:**
+```bash
+gcloud run deploy codeatlas --source . --port 7860 --region us-central1
+--allow-unauthenticated --memory 2Gi --timeout=1800
+--set-secrets=GROQ_API_KEY=groq-api-key:latest --no-cpu-throttling
+```
+
+### Why these flags matter
+
+- `--memory 2Gi` — the default 512Mi causes out-of-memory crashes during indexing.
+- `--timeout=1800` — Cloud Run's default 5-minute request timeout is too short for indexing larger repos.
+- `--no-cpu-throttling` — **required**. Cloud Run throttles CPU to near-zero once a request finishes by default, which silently kills the background indexing thread midway through. This cost real debugging time: indexing worked perfectly locally but died unpredictably in production until this flag was found.
+
+### Known limitation
+
+`data/` (the Chroma vector store) is **ephemeral** — it's wiped on redeploy or when Cloud Run scales an idle instance down to zero. Only the repo indexed by `docker-entrypoint.sh` on container boot (`psf/requests`, by default) survives automatically. Repos added manually through the UI will disappear after a scale-down. Setting `gcloud run services update codeatlas --region us-central1 --min-instances=1` keeps an instance warm (at a small ongoing cost) if persistence matters for a demo.
+
+
 
 ## What I'd build next
 
