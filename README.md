@@ -4,6 +4,39 @@
 
 Ask "How are retries handled?" about any indexed repo. A team of agents (built with LangChain and LangGraph) searches the actual code, reads it, writes an answer, and has a second agent check that answer against the evidence before you see it. The whole thing runs on free-tier infrastructure.
 
+## Who it's for
+
+Developers spend far more time reading code than writing it — commonly 50–70% of the job. CodeAtlas is like a senior teammate who has already read the entire repo and never gets tired of your questions. It helps in the situations every developer hits:
+
+- **Day 1 at a new job:** a repo with 500 files, an outdated README, and the one person who understood it left last year.
+- **A vague bug report:** "Payments fail sometimes." Where in the code do you even start?
+- **Open source:** you want to contribute, but can't tell how the project is organized.
+- **Code review:** you have to judge a change without knowing how the rest of the system works.
+
+### Things you'd ask it
+
+- "Where is user login handled, and which files are involved?"
+- "Explain this architecture diagram in the docs and show me the matching code."
+- "This error appears in production: `KeyError: 'user_id'`. What's the likely cause?"
+- "Which parts of the code will break if I change the `Order` class?"
+- "Write a beginner-friendly summary of this project for a new teammate."
+
+Every answer points to real files and line numbers, so you can check it instead of trusting blindly.
+
+### Why not just search?
+
+Plain search (Ctrl+F) finds exact words — search "login" and you miss `authenticate_user` or `session_start`. CodeAtlas searches by **meaning**: it's like asking a librarian for "a book about sad dogs" and getting the right book even if the title never says "sad" or "dog". It also connects things that live in different places — the code, the docs, the diagrams, the issue discussions — which would otherwise mean five open tabs.
+
+### What it changes
+
+| Without CodeAtlas | With CodeAtlas |
+|---|---|
+| Onboarding takes weeks | Productive in days |
+| Hours hunting for the right file | Answer in seconds, with file links |
+| Interrupting a senior colleague | Ask the tool first |
+| Outdated docs nobody trusts | Answers come from the actual code |
+| Slow reviews of unfamiliar code | Quick explanation of what a change touches |
+
 ## Why this exists
 
 Most portfolio RAG projects are "upload a PDF, ask a question." This one is deliberately harder: it demonstrates hybrid retrieval, a real multi-agent pipeline with a self-critique loop, a working self-improvement mechanism, an MCP server other AI tools can plug into, and a measured evaluation — not just a demo that looks good once.
@@ -40,7 +73,7 @@ flowchart LR
 2. **Researcher** — a hand-built ReAct agent: searches the code (hybrid: vector similarity + BM25 keyword search), reads files, decides when it has enough evidence
 3. **Explainer** — turns the Researcher's findings into a clear, cited answer
 4. **Critic** — independently scores the answer against the actual evidence (1-5); a low score sends it back for one retry with specific feedback
-5. **Lessons** — when a retry was needed and then succeeded, what worked gets saved; future similar questions get that as a hint (self-improvement without retraining anything)
+5. **Lessons** — when a retry was needed and then succeeded, what worked gets saved (for example, "in this repo, auth lives in `/services/auth`"); future similar questions get that as a hint (self-improvement without retraining anything)
 
 ## Tech stack
 

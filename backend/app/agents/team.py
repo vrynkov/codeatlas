@@ -65,6 +65,40 @@ def _evidence_text(evidence: list) -> str:
     return "\n\n".join(evidence)[:MAX_EVIDENCE_CHARS]
 
 
+# Matches a citation like `app/tools/search.py:88-98` (one line, or a range joined by a hyphen
+# or a unicode dash). The path part is captured so we can check and fix it below.
+_CITATION = re.compile(r"(?P<path>[\w.\-/]+\.\w{1,4}):(?P<lines>\d+(?:[-‑–—]\d+)?)")
+
+
+def _fix_citation_paths(text: str, repo_name: str) -> str:
+    """The Explainer sometimes cites a file by a shortened path (e.g. `app/tools/search.py`,
+    copied from the README or prose) instead of the real indexed path (`backend/app/tools/search.py`).
+    The shorter path then 404s when the UI turns it into a GitHub link. We already know every real
+    file path we indexed, so we fix each citation deterministically here: if the cited path wasn't
+    indexed but exactly one indexed file ends with it, rewrite it to that real path. Done in code
+    (not just the prompt) because free models don't reliably obey a "copy the path verbatim" rule."""
+    try:
+        from ..tools.search import get_searcher
+        real = {m["file"] for m in get_searcher(repo_name).metas}
+    except Exception:  # noqa: BLE001  a path-fix failure must never break the answer itself
+        return text
+    if not real:
+        return text
+
+    def resolve(cited: str) -> str | None:
+        if cited in real:
+            return None  # already the real path: leave it alone
+        # A unique indexed file whose path ends with the cited (shorter) path, on a / boundary.
+        matches = [p for p in real if p.endswith("/" + cited)]
+        return matches[0] if len(matches) == 1 else None
+
+    def replace(m: "re.Match") -> str:
+        fixed = resolve(m.group("path"))
+        return f"{fixed}:{m.group('lines')}" if fixed else m.group(0)
+
+    return _CITATION.sub(replace, text)
+
+
 # ---------- the graph ----------
 def build_team_graph(repo_name: str, llm):
     def supervisor(state: TeamState):
@@ -165,6 +199,7 @@ def build_team_graph(repo_name: str, llm):
             store = LessonStore(repo_name)
             store.add(state["question"], lesson_from_retry(summary), "correction")
             _emit("memory", "save", "saved a correction lesson (this question needed a second look)")
+        final = _fix_citation_paths(final, repo_name)  # repair any short/README-style citation paths
         _emit("model", "info", active_model_name())  # which model actually answered, for the eval to record
         _emit("team", "answer", final)
         return {"final": final}
