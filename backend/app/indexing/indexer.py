@@ -4,6 +4,7 @@ Run from the backend/ folder:
     python -m app.indexing.indexer index https://github.com/psf/requests
     python -m app.indexing.indexer search requests "how are retries handled?"
 """
+import os
 import re
 import shutil
 import subprocess
@@ -57,13 +58,41 @@ def _collection_name(repo_name: str) -> str:
     return "repo_" + re.sub(r"[^a-zA-Z0-9_-]", "_", repo_name)
 
 
+class CloneError(Exception):
+    """A git clone/fetch failure, with a message written for the person using the UI rather
+    than the raw `Command '[...]' returned non-zero exit status 128` text."""
+
+
+def _git(*args: str) -> None:
+    """Runs one git command. GIT_TERMINAL_PROMPT=0 makes git fail straight away instead of
+    waiting for a username/password nobody can type (that's what a private repo asks for).
+    stderr is captured so a failure can be explained in plain words, and logged in full."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
+    result = subprocess.run(["git", *args], capture_output=True, text=True, env=env)
+    if result.returncode != 0:
+        print(f"[ERROR] git {' '.join(args)} failed: {result.stderr.strip()}", file=sys.stderr)
+        raise CloneError(_friendly_git_error(result.stderr))
+
+
+def _friendly_git_error(stderr: str) -> str:
+    err = stderr.lower()
+    if "could not read username" in err or "authentication failed" in err or "not found" in err:
+        # GitHub answers a private repo exactly like a missing one, so we can't tell which.
+        return ("GitHub wouldn't let us download this repo. It is either private or the URL is "
+                "wrong. Codeatlas can only index public repos - check the URL, or make the "
+                "repo public on GitHub (Settings -> General -> Danger Zone -> Change visibility).")
+    if "could not resolve host" in err or "unable to access" in err:
+        return "Couldn't reach GitHub right now. Check the URL and try again in a minute."
+    return "git couldn't download this repo. Check that the URL is a public GitHub repo."
+
+
 def clone_repo(url: str) -> tuple[str, Path]:
     name = url.rstrip("/").split("/")[-1].removesuffix(".git")
     dest = REPOS_DIR / name
     if not dest.exists():
         # First time: download a fresh copy.
         REPOS_DIR.mkdir(parents=True, exist_ok=True)
-        subprocess.run(["git", "clone", "--depth", "1", url, str(dest)], check=True)
+        _git("clone", "--depth", "1", url, str(dest))
     else:
         # Already on disk: refresh it so re-indexing sees the latest commit, instead of
         # silently re-embedding the stale copy. We use fetch + `reset --hard` rather than
@@ -72,11 +101,11 @@ def clone_repo(url: str) -> tuple[str, Path]:
         # If anything goes wrong (corrupted folder, rewritten history), fall back to a
         # clean re-clone so a broken copy can't get permanently stuck.
         try:
-            subprocess.run(["git", "-C", str(dest), "fetch", "--depth", "1", "origin"], check=True)
-            subprocess.run(["git", "-C", str(dest), "reset", "--hard", "origin/HEAD"], check=True)
-        except subprocess.CalledProcessError:
+            _git("-C", str(dest), "fetch", "--depth", "1", "origin")
+            _git("-C", str(dest), "reset", "--hard", "origin/HEAD")
+        except CloneError:
             shutil.rmtree(dest, ignore_errors=True)
-            subprocess.run(["git", "clone", "--depth", "1", url, str(dest)], check=True)
+            _git("clone", "--depth", "1", url, str(dest))
     return name, dest
 
 

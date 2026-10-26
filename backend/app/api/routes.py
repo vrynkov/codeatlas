@@ -10,7 +10,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
 from ..agents.team import run_team, submit_feedback
-from ..indexing.indexer import get_progress, start_indexing_job
+from ..indexing.indexer import CloneError, get_progress, start_indexing_job
 from ..mcp_server import _indexed_repos  # the same "which repos exist" logic, reused here
 
 router = APIRouter(prefix="/api")
@@ -54,6 +54,8 @@ async def add_repo(body: AddRepoBody, background_tasks: BackgroundTasks) -> dict
     background; the frontend polls GET /repos/{name}/index-status for live progress."""
     try:
         job = await anyio.to_thread.run_sync(start_indexing_job, body.url)
+    except CloneError as e:
+        raise HTTPException(400, str(e)) from e
     except Exception as e:  # noqa: BLE001
         raise HTTPException(400, f"Could not index that repo: {e}") from e
     background_tasks.add_task(job["work"])
