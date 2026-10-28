@@ -234,6 +234,52 @@ gcloud run deploy codeatlas --source . --port 7860 --region us-central1
 
 
 
+## Logging and tracing
+
+CodeAtlas writes its logs as JSON lines (one event per line) and can send traces to two free services,
+so a separate tool (for example PagePal) can work out what went wrong in a run.
+
+| What | Where it goes | Free tier | Switched on by |
+|---|---|---|---|
+| JSON logs ([`logging_setup.py`](backend/app/logging_setup.py)) | stderr -> Cloud Logging | 50 GiB / month | always on |
+| Request + LLM-call spans ([`tracing_setup.py`](backend/app/tracing_setup.py)) | Cloud Trace | 2.5M spans / month | `CLOUD_TRACE_ENABLED=true` |
+| Agent-by-agent traces (prompts, tool calls, answers) | LangSmith | 5k traces / month | `LANGSMITH_TRACING=true` + key |
+
+Every log line written while handling one request carries the same `request_id`, and in the
+cloud also `logging.googleapis.com/trace`, so Cloud Logging can open the matching trace. The `/ask`
+stream's `request_id` also goes into the LangSmith run's metadata, so a question can be followed
+across all three.
+
+Main events: `request_finished`, `team_run_started` / `team_run_finished` / `team_run_stopped` / `team_run_failed`,
+`llm_call` (model, duration, tokens), `tool_called`, `rate_limited`, `model_fallback`, `all_models_exhausted`,
+`indexing_started` / `indexing_progress` / `indexing_done` / `indexing_failed`, `git_failed`.
+
+Locally, logs are printed as readable text. Set `LOG_FORMAT=json` in `backend/.env` to see the exact cloud format.
+
+### Switch it on in Cloud Run
+
+```bash
+gcloud services enable cloudtrace.googleapis.com
+gcloud projects add-iam-policy-binding YOUR_PROJECT_ID
+--member="serviceAccount:YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+--role="roles/cloudtrace.agent"
+
+gcloud secrets create langsmith-api-key --data-file="path\to\your\langsmith-key.txt"
+gcloud secrets add-iam-policy-binding langsmith-api-key
+--member="serviceAccount:YOUR_PROJECT_NUMBER-compute@developer.gserviceaccount.com"
+--role="roles/secretmanager.secretAccessor"
+
+gcloud run services update codeatlas --region us-central1
+--update-env-vars=CLOUD_TRACE_ENABLED=true,GOOGLE_CLOUD_PROJECT=YOUR_PROJECT_ID,LANGSMITH_TRACING=true,LANGSMITH_PROJECT=codeatlas
+--update-secrets=LANGSMITH_API_KEY=langsmith-api-key:latest
+```
+
+During a load test, add `LANGSMITH_TRACING_SAMPLING_RATE=0.1` and `CLOUD_TRACE_SAMPLE_RATE=0.1` so only
+10% of requests are traced and the free LangSmith quota lasts.
+
+Note: lessons (the self-improvement memory) live in the same `data/` folder, so they are wiped too
+when Cloud Run scales to zero (see the known limitation above).
+
 ## What I'd build next
 
 - Multimodal support: index architecture diagrams and screenshots in a repo's docs (CLIP embeddings), not just text

@@ -1,16 +1,35 @@
 """The tools the agent can use. Each tool is a plain Python function with a clear description."""
+import functools
+import time
 from pathlib import Path
 
 from langchain_core.tools import tool
 
 from ..config import MAX_TOOL_OUTPUT_CHARS, REPOS_DIR
+from ..logging_setup import get_logger
 from .search import RepoNotIndexedError, get_searcher
+
+log = get_logger(__name__)
+
+
+def _logged(fn):
+    """Writes one `tool_called` log line per call: which tool, its arguments, how long it took and
+    how much text it returned (an empty or "not found" result often explains a bad answer)."""
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        out = fn(*args, **kwargs)
+        log.info("tool_called", tool=fn.__name__, args=kwargs, result_chars=len(out),
+                 duration_ms=round((time.perf_counter() - start) * 1000))
+        return out
+    return wrapper
 
 
 def build_tools(repo_name: str):
     repo_root = (REPOS_DIR / repo_name).resolve()
 
     @tool
+    @_logged
     def search_code(query: str, path: str = "") -> str:
         """Search the repository for code or docs related to the query.
         Works best with short queries: a concept ('retry logic') or an exact name ('HTTPAdapter').
@@ -34,6 +53,7 @@ def build_tools(repo_name: str):
         return ("\n\n".join(out) or "No results.")[:MAX_TOOL_OUTPUT_CHARS]
 
     @tool
+    @_logged
     def get_file(path: str, start_line: int = 1, end_line: int = 80,
                  line_start: int | None = None, line_end: int | None = None) -> str:
         """Read part of a file from the repository, with line numbers.

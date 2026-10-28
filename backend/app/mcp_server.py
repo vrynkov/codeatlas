@@ -26,8 +26,11 @@ from mcp.server.mcpserver.exceptions import ToolError
 
 from .agents.team import run_team, submit_feedback
 from .config import REPOS_DIR
+from .logging_setup import get_logger
 from .tools.repo_tools import build_tools
 from .tools.search import get_searcher
+
+log = get_logger(__name__)  # writes to stderr, so it never mixes with the stdio MCP wire
 
 mcp = MCPServer(
     name="CodeAtlas",
@@ -117,7 +120,7 @@ def _warm_up() -> None:
         try:
             get_searcher(repo)
         except Exception as e:  # noqa: BLE001  the server should still start
-            print(f"[codeatlas] warm-up skipped for {repo}: {type(e).__name__}: {e}", file=sys.stderr)
+            log.warning("warmup_skipped", repo=repo, error_type=type(e).__name__, error=str(e))
 
 
 def main() -> None:

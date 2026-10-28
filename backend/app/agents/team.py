@@ -237,8 +237,10 @@ def build_team_graph(repo_name: str, llm):
     return g.compile()
 
 
-def run_team(repo_name: str, question: str, llm=None):
-    """Runs the whole team and yields progress events (dicts with agent / type / text)."""
+def run_team(repo_name: str, question: str, llm=None, request_id: str | None = None):
+    """Runs the whole team and yields progress events (dicts with agent / type / text).
+    The name, tags and metadata below only matter when LangSmith tracing is on: they make each
+    question findable there by repo or by the same request_id that appears in the logs."""
     if llm is None:
         from .llm import get_llm
         llm = get_llm()
@@ -246,7 +248,9 @@ def run_team(repo_name: str, question: str, llm=None):
     start = {"question": question, "route": "", "attempts": 0, "findings": "", "evidence": [],
              "files": [], "queries": [], "draft": "", "score": 0, "advice": "", "first_advice": "",
              "final": "", "lessons_used": []}
-    yield from app.stream(start, {"recursion_limit": 30}, stream_mode="custom")
+    config = {"recursion_limit": 30, "run_name": "codeatlas_team", "tags": ["codeatlas", repo_name],
+              "metadata": {"repo": repo_name, "request_id": request_id}}
+    yield from app.stream(start, config, stream_mode="custom")
 
 
 def submit_feedback(repo_name: str, question: str, files: list[str], positive: bool, note: str = "") -> str:
