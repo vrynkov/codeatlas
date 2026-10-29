@@ -219,7 +219,7 @@ gcloud secrets add-iam-policy-binding groq-api-key
 ```bash
 gcloud run deploy codeatlas --source . --port 7860 --region us-central1
 --allow-unauthenticated --memory 2Gi --timeout=1800
---set-secrets=GROQ_API_KEY=groq-api-key:latest --no-cpu-throttling
+--set-secrets=GROQ_API_KEY=groq-api-key:latest --no-cpu-throttling --max-instances=1
 ```
 
 ### Why these flags matter
@@ -227,6 +227,7 @@ gcloud run deploy codeatlas --source . --port 7860 --region us-central1
 - `--memory 2Gi` — the default 512Mi causes out-of-memory crashes during indexing.
 - `--timeout=1800` — Cloud Run's default 5-minute request timeout is too short for indexing larger repos.
 - `--no-cpu-throttling` — **required**. Cloud Run throttles CPU to near-zero once a request finishes by default, which silently kills the background indexing thread midway through. This cost real debugging time: indexing worked perfectly locally but died unpredictably in production until this flag was found.
+- `--max-instances=1` — **required**. Indexing progress lives in the server's memory and the Chroma store lives on its local disk, so every request must reach the same copy of the app. With two or more copies, the UI's progress polling can land on a copy that never started the job and gets `404 No indexing job found`, and a repo indexed on one copy is missing on the others.
 
 ### Known limitation
 
