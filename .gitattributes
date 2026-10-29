@@ -1,0 +1,4 @@
+# Shell scripts run inside the Linux container, so they must keep Linux (LF) line endings even
+# when checked out on Windows. A Windows (CRLF) ending makes "#!/bin/sh" unreadable and the
+# container fails to start with "docker-entrypoint.sh: no such file or directory".
+*.sh text eol=lf
