@@ -238,7 +238,6 @@ gcloud run deploy codeatlas --source . --port 7860 --region us-central1
 ## What I'd build next
 
 - Multimodal support: index architecture diagrams and screenshots in a repo's docs (CLIP embeddings), not just text
-- Disambiguate same-named symbols in search results (the `Session.send` issue above)
 - Persistent storage so an indexed repo survives a Space restart
 
 ## License
