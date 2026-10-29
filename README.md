@@ -155,7 +155,7 @@ Three of four runs show a net positive lean; one shows a net negative one. Chart
 ## Known limitations (found by actually checking the work, not guessing)
 
 - **Citation format varies.** The Explainer sometimes writes `file.py lines 123-456` instead of `file.py:123-456`; the eval's extractor was updated to catch both, but a still-rarer "file name and line number separated by unrelated prose" pattern isn't caught. See [`eval/harness.py`](backend/eval/harness.py).
-- **A same-named-method mixup.** In one answer, the agent correctly identified `Session.send` handles the `verify` parameter, but cited a same-named abstract stub method instead of the real implementation ~600 lines later in the same file. Name-based search doesn't disambiguate multiple symbols sharing a name. (The [chunker](backend/app/indexing/chunker.py) was later improved to give nested functions and class methods their own clean chunk, which directly helps this case — see the project history.)
+- **A same-named-method mixup.** In one answer, the agent correctly identified `Session.send` handles the `verify` parameter, but cited a same-named abstract stub method instead of the real implementation ~600 lines later in the same file. At the time, name-based search didn't disambiguate multiple symbols sharing a name. (Since fixed: the [chunker](backend/app/indexing/chunker.py) now gives nested functions and class methods their own chunk with a qualified name like `Session.send`, and that name is part of the searchable text — see the project history.)
 - **Very broad questions can hit a smaller fallback model's output limit.** A wide-open question like "What is this repository?" invites a long, comprehensive answer; on `qwen-3.8-27b` specifically (the last model in the fallback chain, with the tightest per-minute output ceiling of the three), this can exceed its limit and return a clear "try a shorter or more specific question" message rather than an answer. Rephrasing narrower (e.g. "Is RAG used in this repo?") resolves it immediately. See [`app/agents/llm.py`](backend/app/agents/llm.py).
 - **Paraphrased questions can get a thinner answer.** The same underlying question asked in different words sometimes leads the Researcher to under-explore compared to the original phrasing, even though the answer given is still accurate.
 - **Free-tier daily token quotas are real and tight.** `openai/gpt-oss-120b` and `openai/gpt-oss-20b` each get a separate 200K-token/day budget on Groq's free tier. CodeAtlas automatically falls back across a chain of models when one is exhausted ([`app/agents/llm.py`](backend/app/agents/llm.py)) and clearly reports the switch, but an eval run split across models mid-run is a real, disclosed constraint of building on free infrastructure, not a hidden one.
@@ -238,7 +238,7 @@ gcloud run deploy codeatlas --source . --port 7860 --region us-central1
 ## What I'd build next
 
 - Multimodal support: index architecture diagrams and screenshots in a repo's docs (CLIP embeddings), not just text
-- Persistent storage so an indexed repo survives a Space restart
+- Persistent storage so an indexed repo survives a Cloud Run redeploy or scale-down to zero
 
 ## License
 
