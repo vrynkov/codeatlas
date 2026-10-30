@@ -17,8 +17,11 @@ from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
 from ..config import GROQ_API_KEY, MAX_AGENT_STEPS, MAX_EVIDENCE_CHARS
+from ..logging_setup import get_logger
 from .rate_limits import is_connection_error, is_daily_limit, is_rate_limit, suggested_wait
 from ..tools.repo_tools import build_tools
+
+log = get_logger(__name__)
 
 SYSTEM_PROMPT = """You are CodeAtlas, an expert software engineer who answers questions about ONE code repository.
 
@@ -67,7 +70,7 @@ def invoke_with_recovery(llm_with_tools, messages, tries: int = 3, nudge: str = 
             text = str(e)
             last = attempt == tries - 1
             if "tool_use_failed" in text and not last:
-                print("[RECOVER] model called a tool that doesn't exist; asking it to retry", file=sys.stderr)
+                log.warning("invalid_tool_call_retry", attempt=attempt + 1)
                 extra = [HumanMessage(nudge)]
                 continue
             if is_rate_limit(text):
@@ -79,11 +82,11 @@ def invoke_with_recovery(llm_with_tools, messages, tries: int = 3, nudge: str = 
                     raise RuntimeError(f"Groq {kind} rate limit hit; try again in ~{mins}. "
                                        f"[Groq said: {text[:400]}]") from e
                 if not last:
-                    print(f"[RECOVER] rate limit hit; waiting {wait or 20:.0f} seconds", file=sys.stderr)
+                    log.warning("rate_limited", wait_s=round(wait or 20), action="wait_and_retry", attempt=attempt + 1)
                     time.sleep(wait or 20)
                     continue
             if is_connection_error(text) and not last:
-                print("[RECOVER] connection hiccup reaching Groq; retrying shortly", file=sys.stderr)
+                log.warning("connection_retry", attempt=attempt + 1, error_type=type(e).__name__)
                 time.sleep(3)
                 continue
             raise
@@ -120,7 +123,7 @@ def force_answer(llm, messages):
     try:
         return invoke_with_recovery(llm, prompt, nudge=NO_TOOLS_NUDGE)
     except Exception as e:  # noqa: BLE001
-        print(f"[LIMIT]   could not write a final answer ({type(e).__name__})", file=sys.stderr)
+        log.error("forced_answer_failed", error_type=type(e).__name__)
         return AIMessage(content="(The researcher ran out of steps and could not summarize; "
                                  "see the evidence it gathered.)")
 
@@ -144,19 +147,19 @@ def build_graph(repo_name: str, llm=None, system_prompt: str = SYSTEM_PROMPT):
 
         # Out of steps? Don't crash: ask for the best possible answer, with tools switched off.
         if steps_used >= MAX_AGENT_STEPS - 1:
-            print("[LIMIT]   step limit reached; asking for a final answer", file=sys.stderr)
+            log.warning("step_limit_reached", steps=steps_used)
             return {"messages": [force_answer(llm, state["messages"])]}
 
         reply = invoke_with_recovery(llm_with_tools, msgs)
 
         # Same tool call as before? That is a loop. Nudge once, then force an answer.
         if reply.tool_calls and _is_repeat(reply, state["messages"]):
-            print("[NUDGE]   repeated call blocked; asking the model to try something different", file=sys.stderr)
+            log.warning("repeated_tool_call_blocked", tools=[tc["name"] for tc in reply.tool_calls])
             nudge = HumanMessage("You already ran that exact call and have its result above. Do NOT repeat it. "
                                  "Either read code with get_file, search with different words, or answer now.")
             reply = invoke_with_recovery(llm_with_tools, msgs + [nudge])
             if reply.tool_calls and _is_repeat(reply, state["messages"]):
-                print("[LIMIT]   still looping; asking for a final answer", file=sys.stderr)
+                log.warning("still_looping_forced_answer")
                 reply = force_answer(llm, state["messages"])
         return {"messages": [reply]}
 

@@ -9,6 +9,7 @@ import re
 import shutil
 import subprocess
 import sys
+import time
 from pathlib import Path
 
 import chromadb
@@ -17,6 +18,9 @@ from chromadb.utils import embedding_functions
 from .chunker import chunk_repo, scan_repo
 
 from ..config import DB_DIR, REPOS_DIR
+from ..logging_setup import get_logger
+
+log = get_logger(__name__)
 
 EMBED_MODEL = "all-MiniLM-L6-v2"  # small, free, runs on CPU
 
@@ -70,7 +74,7 @@ def _git(*args: str) -> None:
     env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
     result = subprocess.run(["git", *args], capture_output=True, text=True, env=env)
     if result.returncode != 0:
-        print(f"[ERROR] git {' '.join(args)} failed: {result.stderr.strip()}", file=sys.stderr)
+        log.warning("git_failed", args=" ".join(args), exit_code=result.returncode, stderr=result.stderr.strip())
         raise CloneError(_friendly_git_error(result.stderr))
 
 
@@ -123,6 +127,8 @@ def _embed_and_store(name: str, chunks: list, progress: dict | None = None) -> i
     """The genuinely slow part (runs the embedding model over every chunk) - separated out so
     it can be run in a background thread while progress is updated along the way, instead of
     one long request with no feedback until it's entirely done."""
+    started = time.perf_counter()
+    log.info("indexing_started", repo=name, chunks=len(chunks))
     client = _client()
     cname = _collection_name(name)
     try:
@@ -141,6 +147,7 @@ def _embed_and_store(name: str, chunks: list, progress: dict | None = None) -> i
         progress["stage"] = "embedding"
 
     B = 16  # smaller than before (was 64) specifically so progress updates more often for the UI
+    next_quarter = 25  # log at 25/50/75%, not every batch (that was hundreds of lines per repo)
     for i in range(0, len(chunks), B):
         batch = chunks[i : i + B]
         col.add(
@@ -155,7 +162,10 @@ def _embed_and_store(name: str, chunks: list, progress: dict | None = None) -> i
             ],
         )
         done = min(i + B, len(chunks))
-        print(f"  {done}/{len(chunks)}")
+        percent = done * 100 // len(chunks)
+        if percent >= next_quarter and done < len(chunks):
+            log.info("indexing_progress", repo=name, percent=percent, chunks_done=done, chunks_total=len(chunks))
+            next_quarter = (percent // 25 + 1) * 25
         if progress is not None:
             progress["chunks_done"] = done
 
@@ -165,6 +175,7 @@ def _embed_and_store(name: str, chunks: list, progress: dict | None = None) -> i
     # top, to avoid a circular import (search.py imports from this module).
     from ..tools.search import get_searcher
     get_searcher.cache_clear()
+    log.info("indexing_done", repo=name, chunks=len(chunks), seconds=round(time.perf_counter() - started, 1))
     return len(chunks)
 
 
@@ -209,9 +220,7 @@ def start_indexing_job(url: str) -> dict:
             # error." chase: a one-line str(e) sent to the UI is often not enough to diagnose
             # what actually happened) - without this, a failed background job would otherwise
             # leave no trace at all beyond that one generic message.
-            import traceback
-            print(f"[ERROR] indexing '{name}' failed: {type(e).__name__}: {e}", file=sys.stderr)
-            traceback.print_exc(file=sys.stderr)
+            log.exception("indexing_failed", repo=name, error_type=type(e).__name__)
             progress["stage"] = "error"
             progress["error"] = str(e)
 

@@ -17,12 +17,17 @@ not make every future question start from the rerouted-to model.
 """
 import json
 import os
-import sys
 import time
 from pathlib import Path
 
+from opentelemetry import trace
+
 from ..config import BACKEND_DIR, GROQ_API_KEY, GROQ_MODEL
+from ..logging_setup import get_logger
 from .rate_limits import is_daily_limit, is_rate_limit, suggested_wait
+
+log = get_logger(__name__)
+_tracer = trace.get_tracer(__name__)  # does nothing unless tracing_setup switched tracing on
 
 # The account's other real models, in the order to fall back through. GROQ_MODEL (from .env)
 # is always tried first; override the whole chain with GROQ_MODEL_CHAIN="a,b,c" in .env if needed.
@@ -107,6 +112,27 @@ class MultiModelChatGroq:
         client = _make_client(self.models[idx], self.temperature)
         return client.bind_tools(self.tools) if self.tools else client
 
+    def _timed_invoke(self, idx: int, messages, **kwargs):
+        """One call to Groq, logged (model, time, tokens) and traced as its own span. Token counts
+        are what the free tier limits, so PagePal can see which step uses up the quota."""
+        model = self.models[idx]
+        start = time.perf_counter()
+        with _tracer.start_as_current_span("llm_call") as span:
+            span.set_attribute("llm.model", model)
+            try:
+                result = self._client_for(idx).invoke(messages, **kwargs)
+            except Exception as e:
+                log.info("llm_call_failed", model=model, error_type=type(e).__name__,
+                         duration_ms=round((time.perf_counter() - start) * 1000))
+                raise
+            usage = getattr(result, "usage_metadata", None) or {}
+            span.set_attribute("llm.input_tokens", usage.get("input_tokens", 0))
+            span.set_attribute("llm.output_tokens", usage.get("output_tokens", 0))
+        log.info("llm_call", model=model, duration_ms=round((time.perf_counter() - start) * 1000),
+                 input_tokens=usage.get("input_tokens"), output_tokens=usage.get("output_tokens"),
+                 tool_calls=len(getattr(result, "tool_calls", None) or []))
+        return result
+
     def _next_viable(self, after_idx: int) -> int | None:
         """The next index after `after_idx` that isn't already confirmed dead for today."""
         idx = after_idx + 1
@@ -125,9 +151,9 @@ class MultiModelChatGroq:
             quick_tries = 0
             while True:  # may retry THIS SAME idx a bounded number of times before moving on
                 try:
-                    result = self._client_for(idx).invoke(messages, **kwargs)
+                    result = self._timed_invoke(idx, messages, **kwargs)
                     if idx != _LAST_USED["idx"]:
-                        print(f"[MODEL] now using {self.models[idx]}", file=sys.stderr)
+                        log.info("model_switched", model=self.models[idx])
                         _emit_switch(self.models[idx])
                     _LAST_USED["idx"] = idx  # for reporting only - see module docstring
                     return result
@@ -142,8 +168,8 @@ class MultiModelChatGroq:
                     if (not daily and wait is not None and wait <= self.MIN_WAIT_TO_REROUTE
                             and quick_tries < self.MAX_QUICK_RETRIES):
                         quick_tries += 1
-                        print(f"[MODEL] {self.models[idx]} hit a brief limit; waiting {wait:.0f}s "
-                              f"on the same model", file=sys.stderr)
+                        log.warning("rate_limited", model=self.models[idx], wait_s=round(wait),
+                                    action="wait_same_model", attempt=quick_tries)
                         time.sleep(wait)
                         continue  # inner while True -> correctly retries the SAME idx
 
@@ -155,16 +181,16 @@ class MultiModelChatGroq:
                         _STATE["active"] = idx + 1
                         _save_state(_STATE)
                         next_name = self.models[next_idx] if next_idx is not None else "no more models configured"
-                        print(f"[MODEL] {self.models[idx]} exhausted for today; trying the next model {next_name}",
-                              file=sys.stderr)
+                        log.warning("model_fallback", model=self.models[idx], next_model=next_name,
+                                    reason="daily_limit")
                     elif next_idx is not None:
                         # Short-lived limit worth rerouting for (longer than MIN_WAIT_TO_REROUTE),
                         # not a daily one - try another model's separate bucket for just this
                         # call, WITHOUT persisting: next time should still try this model first.
-                        mins = f"{wait:.0f}s" if wait else "a bit"
-                        print(f"[MODEL] {self.models[idx]} hit a short-term limit (retry in ~{mins}); "
-                              f"trying {self.models[next_idx]} for this request instead", file=sys.stderr)
+                        log.warning("model_fallback", model=self.models[idx], next_model=self.models[next_idx],
+                                    reason="short_term_limit", wait_s=round(wait) if wait else None)
                     elif wait is None:
+                        log.error("request_too_large", model=self.models[idx])
                         # No parseable "try again in Xs" - this ISN'T a normal throttle that
                         # clears with time (e.g. Groq's "request too large for this model's
                         # per-minute output limit" error: the SAME request will fail identically
@@ -191,6 +217,7 @@ class MultiModelChatGroq:
             # A genuine setup mistake - an empty GROQ_MODEL_CHAIN in .env, or similar.
             raise RuntimeError("No Groq models configured (MODEL_CHAIN is empty). "
                                "Check GROQ_MODEL / GROQ_MODEL_CHAIN in your .env file.")
+        log.error("all_models_exhausted", models=self.models)
         # Every model in the chain is legitimately exhausted for today (this call may not have
         # tried any of them itself, if an EARLIER call already used them all up - that's why we
         # can't just re-raise `last_err`, which would be None in that case).
@@ -209,13 +236,13 @@ def active_model_name() -> str:
 
 
 def _emit_switch(model: str) -> None:
-    """Also report a switch as a normal team event (not just to stderr), so anything reading
+    """Also report a switch as a normal team event (not just to the logs), so anything reading
     run_team()'s event stream - like the eval harness - can record which model answered what.
     A no-op outside a LangGraph run (e.g. the standalone `python -m app.agents.react_agent` CLI)."""
     try:
         from langgraph.config import get_stream_writer
         get_stream_writer()({"agent": "model", "type": "switch", "text": model})
-    except Exception:  # noqa: BLE001  not inside a graph run right now - the stderr print still happened
+    except Exception:  # noqa: BLE001  not inside a graph run right now - the log line was still written
         pass
 
 

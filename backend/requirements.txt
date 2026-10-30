@@ -9,3 +9,8 @@ mcp>=2,<3
 matplotlib
 fastapi
 uvicorn[standard]
+structlog
+opentelemetry-sdk
+opentelemetry-instrumentation-fastapi
+opentelemetry-exporter-gcp-trace
+opentelemetry-propagator-gcp
