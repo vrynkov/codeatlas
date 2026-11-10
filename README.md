@@ -1,5 +1,7 @@
 # CodeAtlas
 
+[![tests](https://github.com/vrynkov/codeatlas/actions/workflows/tests.yml/badge.svg)](https://github.com/vrynkov/codeatlas/actions/workflows/tests.yml)
+
 **An AI team that reads a GitHub repository and answers questions about it — with citations you can check, and answers that get better over time.**
 
 Ask "How are retries handled?" about any indexed repo. A team of agents (built with LangChain and LangGraph) searches the actual code, reads it, writes an answer, and has a second agent check that answer against the evidence before you see it. The whole thing runs on free-tier infrastructure.
@@ -110,6 +112,14 @@ npm run dev
 ```
 Open the URL Vite prints, pick `requests` from the left rail, and ask a question.
 
+**Run the tests** (offline and free: the AI model, GitHub and the embedding model are all replaced by fakes, so no API key or network is needed):
+```bash
+cd backend
+pip install -r requirements-dev.txt
+pytest
+```
+They cover the agent loop (retry, give-up, broken-review handling), model fallback, citation repair, the eval's scoring rules, and every abuse protection below. They also run on every push via GitHub Actions.
+
 **Try the MCP server** (see [`scripts/mcp_client_demo.py`](backend/scripts/mcp_client_demo.py)):
 ```bash
 cd backend
@@ -118,7 +128,26 @@ python scripts/mcp_client_demo.py requests "How are retries handled?"
 
 ## Evaluation results
 
-Measured on a 14-question set against `psf/requests` (10 code questions + 4 routing/chat checks), on `openai/gpt-oss-120b`:
+### How the eval keeps itself honest
+
+An eval that grades itself proves little, so:
+
+- **A different model grades the answer.** The Critic starts from a different model than the one that wrote the answer (`CRITIC_MODEL_CHAIN` in [`llm.py`](backend/app/agents/llm.py)). If rate limits force it onto the same model, the eval flags that answer as "self-graded".
+- **A broken review is a fail.** If the Critic returns something unreadable (twice), the answer is shown to the user as *Unverified* and the eval counts it as a **fail**, never a pass. Misrouted questions and errors also stay in the totals.
+- **Outside checks with no AI involved:** did the answer name the expected file and keyword, and does every `file:line` it cites really exist (the file is there and has those lines)?
+- **A repo the models can't have memorized.** `psf/requests` is in every model's training data, so a good score there partly measures memory. CodeAtlas's own code (written in 2026, after these models were trained) is the second test set: [`eval/questions_codeatlas.json`](backend/eval/questions_codeatlas.json).
+- **A no-search baseline.** [`eval/baseline.py`](backend/eval/baseline.py) asks the same questions to the same model with no search at all, and prints both side by side. The gap between the two is what the agents and search actually add.
+
+```bash
+python -m app.indexing.indexer index https://github.com/vrynkov/codeatlas
+python -m eval.run_eval codeatlas     # the full team
+python -m eval.baseline codeatlas     # the same model, no search
+python -m eval.baseline requests      # shows how much of the requests score is memory
+```
+
+### Earlier results on `requests`
+
+Measured before the changes above (same model as Critic; a broken review was counted as a pass), on a 14-question set against `psf/requests` (10 code questions + 4 routing/chat checks), on `openai/gpt-oss-120b`:
 
 | Metric | Result |
 |---|---|
@@ -162,6 +191,16 @@ Three of four runs show a net positive lean; one shows a net negative one. Chart
 - **Reasoning models have hidden costs.** `openai/gpt-oss-120b` generates internal "thinking" tokens that count against quota even for a trivial prompt — a plain 1-token diagnostic probe is not actually free to run against it.
 - **The self-improvement comparison leans positive but isn't fully consistent (see the table above).** The one net-negative run (Run 2) had a notably small sample (4 vs. 8 fully-scored questions, since the BEFORE pass hit the daily quota early), a model change mid-experiment (`gpt-oss-20b` → `qwen-3.8-27b` as the day's quota shifted), and unusually heavy rate-limiting throughout — real free-tier conditions that make a clean comparison hard, not a flaw specific to that run alone (every run above has some version of this). A controlled re-test — one model, full sample, run when quota is fresh — is the next step toward a confident answer.
 
+## Running it publicly: abuse protections
+
+The demo server is open to anyone, so it defends itself (all limits are settings in [`config.py`](backend/app/config.py)):
+
+- **Only public GitHub repos.** URLs must look like `https://github.com/<owner>/<repo>`; anything else (`file://`, other hosts, `--option` tricks, `..`) is refused before git runs, and the clone URL is rebuilt from the checked parts.
+- **Size caps.** GitHub's API size is checked before downloading, the clone has a time limit, the downloaded size is checked again, and repos with too many code chunks to embed are refused. Only one repo indexes at a time.
+- **No silent replacement.** `github.com/someone-else/requests` can't overwrite the indexed `psf/requests`, because folders are named by repo name.
+- **Rate limits per visitor** (in memory, free): a few questions per minute and per day, a few new repos per hour. This works because the app runs as a single instance (`--max-instances=1`); it resets on restart.
+- **No prompt injection through feedback.** Lessons are pasted into future prompts, so they're built only from fixed sentences, real file paths, and filtered search words. The free-text note goes to `data/feedback_notes.jsonl` for a human to read (`python -m app.memory.lessons notes`) and never reaches a model. Feedback is accepted only for an answer the server actually gave (looked up by its request id), once.
+
 ## Project structure
 
 ```
@@ -173,7 +212,8 @@ backend/
     memory/       # Self-improvement "lessons" store
     tools/        # Hybrid search, safe file reading
     mcp_server.py # Exposes the same capabilities over MCP
-  eval/           # Question set, scoring harness, before/after comparison, charting
+  eval/           # Question sets, scoring harness, no-search baseline, before/after comparison, charting
+  tests/          # Offline pytest suite (fake model, no network)
 frontend/
   src/            # React UI: repo picker, chat, live agent trace log
 ```

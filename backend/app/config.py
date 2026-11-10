@@ -31,3 +31,27 @@ MAX_EVIDENCE_CHARS = 9000 # how much code the Explainer/Critic get to see (keeps
 # --- Self-improvement (lessons memory) ---
 LESSON_TOP_K = 3            # how many past lessons to look at per question
 MAX_LESSON_DISTANCE = 0.75  # cosine distance: smaller = more similar. Tune this in config.py if recall feels off.
+
+# --- Public-server safety limits (all overridable from .env / Cloud Run env vars) ---
+def _int_env(name: str, default: int) -> int:
+    try:
+        return int(os.getenv(name, default))
+    except ValueError:
+        return default
+
+MAX_REPO_MB = _int_env("MAX_REPO_MB", 50)           # refuse repos bigger than this (download size)
+MAX_REPO_CHUNKS = _int_env("MAX_REPO_CHUNKS", 3000)  # embedding is the slow, CPU-heavy part: cap it
+CLONE_TIMEOUT_S = _int_env("CLONE_TIMEOUT_S", 90)    # a clone taking longer than this is given up
+MAX_QUESTION_CHARS = _int_env("MAX_QUESTION_CHARS", 1000)
+
+# Rate limits PER VISITOR (per IP address). They live in memory, which is fine ONLY because the
+# app runs as a single instance (--max-instances=1). They reset when the instance restarts.
+ASK_PER_MINUTE = _int_env("ASK_PER_MINUTE", 3)
+ASK_PER_DAY = _int_env("ASK_PER_DAY", 15)
+ADD_REPO_PER_HOUR = _int_env("ADD_REPO_PER_HOUR", 3)
+ADD_REPO_PER_DAY = _int_env("ADD_REPO_PER_DAY", 6)
+FEEDBACK_PER_MINUTE = _int_env("FEEDBACK_PER_MINUTE", 10)
+# How many proxies in front of the app add themselves to X-Forwarded-For. Cloud Run's front end
+# appends the real visitor IP as the LAST entry, so 1 = "use the last entry". Anything to the left
+# of it was written by the visitor and can be faked, so it is never trusted.
+TRUSTED_PROXY_HOPS = _int_env("TRUSTED_PROXY_HOPS", 1)

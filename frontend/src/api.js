@@ -31,11 +31,13 @@ export async function getIndexStatus(name) {
   return r.json(); // {stage, file_count, total_bytes, chunks_total, chunks_done, estimated_seconds, url?, commit?}
 }
 
-export function sendFeedback(repo, question, files, helpful) {
+// Only the answer's requestId is sent: the server looks up the repo, question and cited files
+// itself, so feedback can't be faked for an answer it never gave.
+export function sendFeedback(requestId, helpful) {
   return fetch(`${BASE}/feedback`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ repo, question, files, helpful }),
+    body: JSON.stringify({ request_id: requestId, helpful }),
   });
 }
 
@@ -51,7 +53,7 @@ export function askStream(repo, question, { onEvent, onDone, onStopped, onError 
     onEvent(ev);
     if (ev.agent === "team" && ev.type === "answer") {
       source.close();
-      onDone(ev.text);
+      onDone(ev.text, requestId);
     } else if (ev.type === "stopped") {
       source.close();
       onStopped();

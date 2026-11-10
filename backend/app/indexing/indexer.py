@@ -4,12 +4,15 @@ Run from the backend/ folder:
     python -m app.indexing.indexer index https://github.com/psf/requests
     python -m app.indexing.indexer search requests "how are retries handled?"
 """
+import json
 import os
 import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
+import urllib.request
 from pathlib import Path
 
 import chromadb
@@ -17,7 +20,7 @@ from chromadb.utils import embedding_functions
 
 from .chunker import chunk_repo, scan_repo
 
-from ..config import DB_DIR, REPOS_DIR
+from ..config import CLONE_TIMEOUT_S, DB_DIR, MAX_REPO_CHUNKS, MAX_REPO_MB, REPOS_DIR
 from ..logging_setup import get_logger
 
 log = get_logger(__name__)
@@ -62,17 +65,88 @@ def _collection_name(repo_name: str) -> str:
     return "repo_" + re.sub(r"[^a-zA-Z0-9_-]", "_", repo_name)
 
 
+class IndexBusyError(Exception):
+    """Another indexing job is already running (we only run one at a time)."""
+
+
+def _indexed_before(name: str) -> bool:
+    try:
+        _client().get_collection(_collection_name(name))
+        return True
+    except Exception:  # noqa: BLE001
+        return False
+
+
 class CloneError(Exception):
     """A git clone/fetch failure, with a message written for the person using the UI rather
     than the raw `Command '[...]' returned non-zero exit status 128` text."""
 
 
+# ---------- what the public server is allowed to clone ----------
+# Only https://github.com/<owner>/<repo>. Everything else is refused BEFORE git ever runs:
+#   - other hosts / file:// / ssh://  -> could read the server's own disk or reach internal services
+#   - a URL starting with "-"         -> git would treat it as an OPTION ("argument injection")
+#   - "..", spaces, query strings     -> no legitimate GitHub repo needs them
+# GitHub's own rules: owner = letters, digits, single hyphens; repo = letters, digits, . _ -
+_GITHUB_URL = re.compile(
+    r"^https://github\.com/(?P<owner>[A-Za-z0-9](?:[A-Za-z0-9]|-(?=[A-Za-z0-9])){0,38})"
+    r"/(?P<repo>[A-Za-z0-9._-]{1,100}?)(?:\.git)?/?$"
+)
+
+
+def parse_github_url(url: str) -> tuple[str, str]:
+    """Returns (owner, repo) for a valid public-GitHub URL, or raises CloneError with a plain
+    message. `http://` and a missing scheme are upgraded to https://github.com for convenience."""
+    url = (url or "").strip()
+    if url.startswith("http://github.com/"):
+        url = "https://" + url[len("http://"):]
+    elif url.startswith("github.com/"):
+        url = "https://" + url
+    m = _GITHUB_URL.match(url)
+    if not m or m.group("repo") in (".", "..") or ".." in m.group("repo"):
+        raise CloneError("Only public GitHub repos can be added, as https://github.com/<owner>/<repo>.")
+    return m.group("owner"), m.group("repo")
+
+
+def _github_size_mb(owner: str, repo: str) -> float | None:
+    """The repo's size according to GitHub's free public API (no token needed; 60 calls/hour per
+    server IP). Returns None if GitHub can't be asked right now - then we rely on the checks AFTER
+    the download instead (clone timeout + measured size), so this is a fast first filter, not the
+    only one."""
+    try:
+        req = urllib.request.Request(f"https://api.github.com/repos/{owner}/{repo}",
+                                     headers={"Accept": "application/vnd.github+json",
+                                              "User-Agent": "codeatlas"})
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            return json.load(resp).get("size", 0) / 1024  # GitHub reports kilobytes
+    except Exception:  # noqa: BLE001  rate-limited, offline, 404 for private... -> unknown
+        return None
+
+
+def _folder_mb(path: Path) -> float:
+    total = 0
+    for p in path.rglob("*"):
+        if p.is_file() and ".git" not in p.parts:
+            try:
+                total += p.stat().st_size
+            except OSError:
+                pass
+    return total / 1_000_000
+
+
 def _git(*args: str) -> None:
     """Runs one git command. GIT_TERMINAL_PROMPT=0 makes git fail straight away instead of
     waiting for a username/password nobody can type (that's what a private repo asks for).
-    stderr is captured so a failure can be explained in plain words, and logged in full."""
-    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0"}
-    result = subprocess.run(["git", *args], capture_output=True, text=True, env=env)
+    GIT_LFS_SKIP_SMUDGE=1 skips big Git-LFS files. The timeout stops a huge/slow repo from
+    tying the server up. stderr is captured so a failure can be explained in plain words."""
+    env = {**os.environ, "GIT_TERMINAL_PROMPT": "0", "GIT_LFS_SKIP_SMUDGE": "1"}
+    try:
+        result = subprocess.run(["git", *args], capture_output=True, text=True, env=env,
+                                timeout=CLONE_TIMEOUT_S)
+    except subprocess.TimeoutExpired as e:
+        log.warning("git_timeout", args=" ".join(args), timeout_s=CLONE_TIMEOUT_S)
+        raise CloneError(f"Downloading this repo took longer than {CLONE_TIMEOUT_S} seconds, so we "
+                         f"stopped. It is probably too big for this free demo server.") from e
     if result.returncode != 0:
         log.warning("git_failed", args=" ".join(args), exit_code=result.returncode, stderr=result.stderr.strip())
         raise CloneError(_friendly_git_error(result.stderr))
@@ -90,13 +164,34 @@ def _friendly_git_error(stderr: str) -> str:
     return "git couldn't download this repo. Check that the URL is a public GitHub repo."
 
 
+def _same_repo(a: str | None, b: str) -> bool:
+    norm = lambda u: (u or "").strip().rstrip("/").removesuffix(".git").lower()  # noqa: E731
+    return norm(a) == norm(b)
+
+
 def clone_repo(url: str) -> tuple[str, Path]:
-    name = url.rstrip("/").split("/")[-1].removesuffix(".git")
+    owner, name = parse_github_url(url)
+    url = f"https://github.com/{owner}/{name}.git"  # rebuilt from the checked parts, never used raw
     dest = REPOS_DIR / name
+    # Folders are named by repo name only, so github.com/evil/requests would otherwise silently
+    # REPLACE the indexed psf/requests for every user. Refuse a different repo with the same name.
+    if dest.exists() and not _same_repo(repo_source_url(name), url):
+        raise CloneError(f"A different repo called '{name}' is already indexed "
+                         f"({repo_source_url(name) or 'unknown source'}), so this one can't be added.")
+    size = _github_size_mb(owner, name)
+    if size is not None and size > MAX_REPO_MB:
+        raise CloneError(f"This repo is about {size:.0f} MB; this free demo server only indexes "
+                         f"repos up to {MAX_REPO_MB} MB.")
     if not dest.exists():
-        # First time: download a fresh copy.
+        # First time: download a fresh copy. "--" means "no more options after this", so even a
+        # URL that slipped past the checks could never be read as a git option.
         REPOS_DIR.mkdir(parents=True, exist_ok=True)
-        _git("clone", "--depth", "1", url, str(dest))
+        try:
+            _git("clone", "--depth", "1", "--", url, str(dest))
+        except CloneError:
+            shutil.rmtree(dest, ignore_errors=True)  # don't leave a half-downloaded folder behind
+            raise
+        _check_size_after_clone(dest)
     else:
         # Already on disk: refresh it so re-indexing sees the latest commit, instead of
         # silently re-embedding the stale copy. We use fetch + `reset --hard` rather than
@@ -109,8 +204,18 @@ def clone_repo(url: str) -> tuple[str, Path]:
             _git("-C", str(dest), "reset", "--hard", "origin/HEAD")
         except CloneError:
             shutil.rmtree(dest, ignore_errors=True)
-            _git("clone", "--depth", "1", url, str(dest))
+            _git("clone", "--depth", "1", "--", url, str(dest))
+        _check_size_after_clone(dest)
     return name, dest
+
+
+def _check_size_after_clone(dest: Path) -> None:
+    """Second size check, on what was actually downloaded (GitHub's number can be unavailable)."""
+    mb = _folder_mb(dest)
+    if mb > MAX_REPO_MB:
+        shutil.rmtree(dest, ignore_errors=True)
+        raise CloneError(f"This repo is {mb:.0f} MB after download; this free demo server only "
+                         f"indexes repos up to {MAX_REPO_MB} MB.")
 
 
 def _document_for(c) -> str:
@@ -194,9 +299,34 @@ def start_indexing_job(url: str) -> dict:
     initial progress entry, and returns immediately with enough info for the UI to show a
     meaningful "indexing..." state right away. The caller is expected to run the returned
     work function in the background (see routes.py) rather than awaiting it here."""
+    # The lock makes "check nobody else is indexing" + "start indexing" one step, so two requests
+    # arriving at the same moment can't both slip through the check.
+    if not _START_LOCK.acquire(blocking=False):
+        raise IndexBusyError("Another repo is being added right now. Please try again in a minute.")
+    try:
+        return _start_indexing_job_locked(url)
+    finally:
+        _START_LOCK.release()
+
+
+_START_LOCK = threading.Lock()
+
+
+def _start_indexing_job_locked(url: str) -> dict:
+    busy = [n for n, p in _PROGRESS.items() if p.get("stage") in ("loading_model", "embedding")]
+    if busy:
+        # One indexing job at a time: embedding uses all of the server's single CPU, and two at
+        # once would just make both (and every question being answered meanwhile) crawl.
+        raise IndexBusyError(f"Another repo ('{busy[0]}') is being indexed right now. "
+                             f"Please try again in a minute or two.")
     name, path = clone_repo(url)
     scan = scan_repo(path)
     chunks = chunk_repo(path)
+    if len(chunks) > MAX_REPO_CHUNKS:
+        if not _indexed_before(name):
+            shutil.rmtree(path, ignore_errors=True)  # don't leave an un-indexable repo listed in the UI
+        raise CloneError(f"This repo has {len(chunks)} code pieces to index; this free demo server "
+                         f"handles up to {MAX_REPO_CHUNKS}. Try a smaller repo.")
     estimated_seconds = round(
         len(chunks) / CHUNKS_PER_SECOND_ESTIMATE + MODEL_LOAD_SECONDS_ESTIMATE + OTHER_OVERHEAD_SECONDS
     )

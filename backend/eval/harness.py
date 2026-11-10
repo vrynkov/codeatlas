@@ -3,9 +3,11 @@ by reading the same progress events the terminal and the MCP server already prin
 No extra AI calls needed: we reuse what the team already produces."""
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 
 from app.agents.llm import MODEL_CHAIN
 from app.agents.team import run_team
+from app.config import PASS_SCORE, REPOS_DIR
 
 
 @dataclass
@@ -14,7 +16,8 @@ class RunResult:
     question: str
     route: str = ""
     final: str = ""
-    critic_scores: list = field(default_factory=list)
+    critic_scores: list = field(default_factory=list)  # one entry per review: an int, or None = BROKEN review
+    critic_models: list = field(default_factory=list)  # which model did each review
     cited_files: list = field(default_factory=list)
     models_used: list = field(default_factory=list)  # models switched TO during this question, in order
     error: str = ""
@@ -37,6 +40,11 @@ class RunResult:
     def last_score(self) -> int | None:
         return self.critic_scores[-1] if self.critic_scores else None
 
+    @property
+    def critic_failed(self) -> bool:
+        """The final review was broken (the critic returned no usable score)."""
+        return bool(self.critic_scores) and self.critic_scores[-1] is None
+
 
 _FILE_RE = re.compile(r"([\w./-]+\.\w{1,4})`?(?::\d|\s*\(?lines?\s+\d)", re.I)  # file.py:123 OR
                                                                                 # "`file.py` lines 123" OR
@@ -52,8 +60,11 @@ def run_one(repo: str, item: dict, llm=None) -> RunResult:
                 r.route = ev["text"].split()[0].strip()
             elif ev["agent"] == "critic" and ev["type"] == "review":
                 m = _SCORE_RE.search(ev["text"])
-                if m:
-                    r.critic_scores.append(int(m.group(1)))
+                r.critic_scores.append(int(m.group(1)) if m else None)  # unreadable = broken, not skipped
+            elif ev["agent"] == "critic" and ev["type"] == "review_failed":
+                r.critic_scores.append(None)
+            elif ev["agent"] == "critic" and ev["type"] == "model":
+                r.critic_models.append(ev["text"])
             elif ev["agent"] == "model" and ev["type"] in ("switch", "info"):
                 r.models_used.append(ev["text"])
             elif ev["agent"] == "team" and ev["type"] == "answer":
@@ -64,7 +75,36 @@ def run_one(repo: str, item: dict, llm=None) -> RunResult:
     return r
 
 
-def score_item(item: dict, r: RunResult) -> dict:
+_CITE_RE = re.compile(r"([\w.\-/]+\.\w{1,4}):(\d+)(?:[-‑–—](\d+))?")
+
+
+def check_citations(answer: str, repo: str, repo_dir: Path | None = None) -> dict:
+    """An outside, no-AI check: for every `path:LINE` or `path:START-END` citation in the answer,
+    does that file exist in the repo, and does it really have those lines? A model answering from
+    memory (no search) tends to invent plausible paths and line numbers - this catches that."""
+    root = repo_dir or (REPOS_DIR / repo)
+    if not root.exists():
+        return {"citations": 0, "valid_citations": 0, "invalid_citations": []}
+    files = [p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file() and ".git" not in p.parts]
+    total, valid, bad = 0, 0, []
+    for path, start, end in _CITE_RE.findall(answer):
+        total += 1
+        matches = [f for f in files if f == path or f.endswith("/" + path)]
+        ok = False
+        if len(matches) == 1:
+            try:
+                n_lines = len((root / matches[0]).read_text(encoding="utf-8", errors="replace").splitlines())
+                s, e = int(start), int(end or start)
+                ok = 1 <= s <= e <= n_lines
+            except OSError:
+                ok = False
+        valid += ok
+        if not ok:
+            bad.append(f"{path}:{start}" + (f"-{end}" if end else ""))
+    return {"citations": total, "valid_citations": valid, "invalid_citations": bad}
+
+
+def score_item(item: dict, r: RunResult, repo: str | None = None) -> dict:
     """Compares one run against the question's expectations. Two INDEPENDENT checks on purpose:
     the Critic score comes from inside the pipeline; the keyword/file checks are an outside judge,
     so a bug in the Critic's own prompt can't make the eval look better than it really is.
@@ -83,13 +123,21 @@ def score_item(item: dict, r: RunResult) -> dict:
     text_low = r.final.lower()
     exp_files = item.get("expected_files", [])
     exp_kw = item.get("expected_keywords", [])
+    writer = r.final_model
     out.update({
         "critic_score": r.last_score,
+        # A broken review is a FAIL, never a pass, and the row stays in every average.
+        "critic_failed": r.critic_failed,
+        "passed": (not r.error) and r.route == "research" and r.last_score is not None and r.last_score >= PASS_SCORE,
+        "critic_model": r.critic_models[-1] if r.critic_models else None,
+        # The critic is meant to be a DIFFERENT model from the writer; flag when fallback made them equal.
+        "critic_same_model": bool(r.critic_models) and r.critic_models[-1] == writer,
         "attempts": r.attempts,
         "needed_retry": r.needed_retry,
         "file_hit": any(f in r.cited_files for f in exp_files) if exp_files else None,
         "file_mentioned": any(f.lower() in text_low for f in exp_files) if exp_files else None,
         "keyword_hit": any(k.lower() in text_low for k in exp_kw) if exp_kw else None,
         "cited_files": r.cited_files,
+        **(check_citations(r.final, repo) if repo else {}),
     })
     return out

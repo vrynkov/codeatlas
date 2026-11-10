@@ -15,7 +15,7 @@ import sys
 from pathlib import Path
 
 from .harness import run_one, score_item
-from .run_eval import LONG_LIMIT_MARKER, QUESTIONS, QUOTA_MARKER, RESULTS_DIR, print_summary, summarize
+from .run_eval import LONG_LIMIT_MARKER, QUOTA_MARKER, RESULTS_DIR, print_summary, questions_for, summarize
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.memory.lessons import LessonStore  # noqa: E402
@@ -25,7 +25,7 @@ def run_pass(repo: str, items: list[dict], label: str) -> list[dict]:
     rows = []
     for i, item in enumerate(items, 1):
         print(f"[{label} {i}/{len(items)}] {item['id']}", file=sys.stderr)
-        row = score_item(item, run_one(repo, item))
+        row = score_item(item, run_one(repo, item), repo)
         rows.append(row)
         if QUOTA_MARKER in (row.get("error") or "") or LONG_LIMIT_MARKER in (row.get("error") or ""):
             print(f"\nStopping {label} pass early: daily quota exhausted "
@@ -40,7 +40,7 @@ if __name__ == "__main__":
     if len(sys.argv) < 2:
         sys.exit(__doc__)
     repo = sys.argv[1]
-    items = [q for q in json.loads(QUESTIONS.read_text()) if q["expected_route"] == "research"]
+    items = [q for q in questions_for(repo) if q["expected_route"] == "research"]
 
     cleared = LessonStore(repo).clear()
     print(f"Cleared {cleared} lesson(s) for a clean baseline.\n", file=sys.stderr)
