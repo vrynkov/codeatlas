@@ -145,34 +145,35 @@ python -m eval.baseline codeatlas     # the same model, no search
 python -m eval.baseline requests      # shows how much of the requests score is memory
 ```
 
-### Results on CodeAtlas's own code (2026-11-10)
+### Results on CodeAtlas's own code (2026-11-10, two runs)
 
-12 questions (10 about the code, 2 small-talk routing checks). These questions are about code no model has seen before.
+12 questions (10 about the code, 2 small-talk routing checks). These questions are about code no model has seen before. The team ran twice; where the two runs differ, both values are shown (run 1 / run 2). The no-search baseline ran once.
 
 **Team vs. the same model with no search:**
 
 | Outside check (no AI involved) | CodeAtlas team | Same model, no search |
 |---|---|---|
-| Named the expected file | **90%** | 10% |
-| Cited the expected file as `file:line` | **90%** | 0% |
-| Every cited `file:line` really exists | **100%** (59 citations) | 0% |
-| Mentioned the expected keyword | 90% | 70% |
+| Named the expected file | **90% / 80%** | 10% |
+| Cited the expected file as `file:line` | **90% / 70%** | 0% |
+| Every cited `file:line` really exists | **100% / 100%** (59 / 48 citations) | 0% |
+| Invented file paths (caught and labelled before display) | — / 1 | not filtered |
+| Mentioned the expected keyword | 90% / 80% | 70% |
 
 **The team's own scorecard:**
 
 | Metric | Result |
 |---|---|
-| Passed review (a broken review, misroute or error counts as a fail) | 80% (8 of 10) |
-| Average critic score (over the 9 readable reviews) | 4.44 / 5 |
-| Needed a retry | 30% |
-| Routing accuracy | 92% (11 of 12) |
+| Passed review (a broken review, misroute or error counts as a fail) | 80% / 80% (8 of 10 both times) |
+| Average critic score (over the 9 readable reviews) | 4.44 / 4.67 out of 5 |
+| Needed a retry | 30% / 30% |
+| Routing accuracy | 92% / 92% (11 of 12) |
 
 **How to read this honestly:**
 - **Search is what makes the answers checkable.** Without search, the model guesses believable answers but almost never names the right file, and none of its citations point to real lines.
 - **Keyword checks are weak evidence.** The no-search model still hit 70%, because words like "score" or "lesson" are easy to guess. The file and citation checks are the ones that separate real answers from guesses.
-- **The 100% "citations exist" is partly built in.** Before an answer is shown, the app turns any made-up file path into plain text marked "(not found in this repo)" ([`team.py`](backend/app/agents/team.py)), so those never reach the citation check. The eval now counts them separately as "Invented file paths" (this run predates that counter). The line ranges still get a real check.
-- **Free-tier conditions:** answers came from three models (gpt-oss-120b ×7, gpt-oss-20b ×3, qwen ×2) because of per-minute limits. One answer was graded by the same model that wrote it, and the eval flags that.
-- **Small sample:** 10 code questions, one run. Treat these as indicators, not precise rates.
+- **The 100% "citations exist" is partly built in.** Before an answer is shown, the app turns any made-up file path into plain text marked "(not found in this repo)" ([`team.py`](backend/app/agents/team.py)), so those never reach the citation check. The eval counts them separately as "Invented file paths": 1 in run 2 (run 1 predates that counter). The line ranges still get a real check.
+- **Free-tier conditions:** answers came from three models (run 1: gpt-oss-120b ×7, gpt-oss-20b ×3, qwen ×2; run 2: ×6, ×3, ×3) because of per-minute limits. In each run one answer was graded by the same model that wrote it, and the eval flags that.
+- **Small sample, real variance:** 10 code questions, so one question is 10 points. Between two identical runs, "cited the expected file" moved from 90% to 70%. Treat these as ranges, not precise rates. The gap to the no-search baseline (0–10%) holds in both runs.
 
 ### Earlier results on `requests`
 
