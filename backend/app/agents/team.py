@@ -98,6 +98,11 @@ _CITATION = re.compile(
 _BACKTICK_PATH = re.compile(r"`(?P<path>[\w .\-/]+\.\w{1,4})`")
 
 
+# Appended to a file path the model made up, so the reader is warned instead of misled. The eval
+# counts this exact text to report how many invented paths the filter caught.
+NOT_FOUND_LABEL = " (not found in this repo)"
+
+
 def real_files(repo_name: str) -> set[str]:
     """Every file path in the repo's search index ({} if it can't be read - never raises)."""
     try:
@@ -118,31 +123,36 @@ def _fix_citation_paths(text: str, repo_name: str) -> str:
       * keep it if the path is already a real indexed file;
       * rewrite it if the model shortened a real path (e.g. `app/tools/search.py` ->
         `backend/app/tools/search.py`) and exactly one indexed file ends with it;
-      * otherwise turn it into plain text (drop the line numbers AND the backticks) so the UI
-        does NOT make a link out of it. This last case covers a path the model simply invented
-        for an illustration (e.g. `backend/app/auth/login.py`, a file that doesn't exist) - the
-        reader still sees the path, it just isn't a clickable 404.
+      * if NO indexed file matches, the model invented it (e.g. `backend/app/auth/login.py`):
+        turn it into plain text (no link, no line numbers) AND add NOT_FOUND_LABEL, so the reader
+        is told it isn't real instead of being quietly misled. The words stay so the sentence
+        still reads normally;
+      * if SEVERAL indexed files match (a real file, but we can't tell which), make it plain text
+        without a label - it isn't invented, just ambiguous.
     Done in code, not the prompt, because free models don't reliably obey "only cite real files"."""
     real = real_files(repo_name)
     if not real:
         return text
 
-    def resolve(cited: str) -> str | None:
-        """The real indexed path for a cited path, or None when we can't be sure of exactly one."""
+    def resolve(cited: str) -> tuple[str | None, int]:
+        """(the real indexed path or None, how many indexed files matched)."""
         if cited in real:
-            return cited
+            return cited, 1
         matches = [p for p in real if p.endswith("/" + cited)]
-        return matches[0] if len(matches) == 1 else None
+        return (matches[0] if len(matches) == 1 else None), len(matches)
+
+    def unlinked(path: str, n_matches: int) -> str:
+        return path + (NOT_FOUND_LABEL if n_matches == 0 else "")
 
     def fix_with_lines(m: "re.Match") -> str:
-        real_path = resolve(m.group("path"))
+        real_path, n = resolve(m.group("path"))
         if real_path:  # real file: keep it a link, with whatever backticks it had
             return f"{m.group('lb')}{real_path}:{m.group('lines')}{m.group('rb')}"
-        return m.group("path")  # invented/ambiguous: plain text, no backticks, no :line -> no link
+        return unlinked(m.group("path"), n)  # plain text, no backticks, no :line -> no link
 
     def fix_bare(m: "re.Match") -> str:
-        real_path = resolve(m.group("path"))
-        return f"`{real_path}`" if real_path else m.group("path")
+        real_path, n = resolve(m.group("path"))
+        return f"`{real_path}`" if real_path else unlinked(m.group("path"), n)
 
     text = _CITATION.sub(fix_with_lines, text)       # citations with line numbers
     return _BACKTICK_PATH.sub(fix_bare, text)        # then bare `path` links the UI would also make

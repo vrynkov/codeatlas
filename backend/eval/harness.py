@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from app.agents.llm import MODEL_CHAIN
-from app.agents.team import run_team
+from app.agents.team import NOT_FOUND_LABEL, run_team
 from app.config import PASS_SCORE, REPOS_DIR
 
 
@@ -138,6 +138,9 @@ def score_item(item: dict, r: RunResult, repo: str | None = None) -> dict:
         "file_mentioned": any(f.lower() in text_low for f in exp_files) if exp_files else None,
         "keyword_hit": any(k.lower() in text_low for k in exp_kw) if exp_kw else None,
         "cited_files": r.cited_files,
+        # Made-up file paths the app caught and labelled before showing the answer. They never
+        # reach the citation check above, so they're counted here to keep that 100% honest.
+        "invented_paths": r.final.count(NOT_FOUND_LABEL),
         **(check_citations(r.final, repo) if repo else {}),
     })
     return out

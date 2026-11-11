@@ -23,13 +23,18 @@ def test_shortened_path_is_repaired():
     assert fix("See `app/tools/search.py:10-20`.") == "See `backend/app/tools/search.py:10-20`."
 
 
-def test_invented_file_becomes_plain_text_without_a_link():
+def test_invented_file_becomes_labelled_plain_text_without_a_link():
     out = fix("Like `backend/app/auth/login.py:12-34` does.")
-    assert out == "Like backend/app/auth/login.py does."
+    assert out == "Like backend/app/auth/login.py (not found in this repo) does."
 
 
-def test_bare_backticked_invented_path_is_unwrapped():
-    assert fix("Open `src/nope.py` first.") == "Open src/nope.py first."
+def test_bare_backticked_invented_path_is_unwrapped_and_labelled():
+    assert fix("Open `src/nope.py` first.") == "Open src/nope.py (not found in this repo) first."
+
+
+def test_ambiguous_real_path_is_unlinked_but_not_called_invented(monkeypatch):
+    monkeypatch.setattr(team, "real_files", lambda repo: {"a/utils.py", "b/utils.py"})
+    assert fix("See `utils.py:3`.") == "See utils.py."
 
 
 def test_unicode_dash_ranges_are_understood():
