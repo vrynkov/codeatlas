@@ -106,11 +106,11 @@ async def ask_codeatlas(repo: str, question: str, ctx: Context) -> str:
 
 
 @mcp.tool()
-def rate_answer(repo: str, question: str, helpful: bool, files: list[str] | None = None, note: str = "") -> str:
+def rate_answer(repo: str, question: str, helpful: bool, files: list[str] | None = None) -> str:
     """Tell CodeAtlas whether an answer was helpful. Good answers become 'playbook' lessons and bad ones
     become warnings; both are used as hints on similar questions later (self-improvement)."""
     _check(repo)
-    return submit_feedback(repo, question, files or [], helpful, note)
+    return submit_feedback(repo, question, files or [], helpful)
 
 
 def _warm_up() -> None:

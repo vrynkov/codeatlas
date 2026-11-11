@@ -21,7 +21,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 
 from ..config import GROQ_API_KEY, MAX_AGENT_STEPS, MAX_ATTEMPTS, MAX_EVIDENCE_CHARS, PASS_SCORE
-from ..memory.lessons import LessonStore, lesson_from_retry, record_feedback, safe_files, save_note_for_review
+from ..memory.lessons import LessonStore, lesson_from_retry, record_feedback, safe_files
 from .llm import active_model_name
 from .prompts import CHAT_PROMPT, CRITIC_PROMPT, EXPLAINER_PROMPT, RESEARCHER_PROMPT, SUPERVISOR_PROMPT
 from .react_agent import build_graph, invoke_with_recovery
@@ -310,15 +310,12 @@ def run_team(repo_name: str, question: str, llm=None, request_id: str | None = N
     yield from app.stream(start, config, stream_mode="custom")
 
 
-def submit_feedback(repo_name: str, question: str, files: list[str], positive: bool, note: str = "") -> str:
+def submit_feedback(repo_name: str, question: str, files: list[str], positive: bool) -> str:
     """Call this when the user clicks thumbs up/down on an answer. Only file paths that really exist
-    in the index make it into the lesson; the free-text note is saved for a human to review and is
-    never put into a prompt (see the SECURITY RULE in memory/lessons.py)."""
+    in the index make it into the lesson, and no free text is accepted at all (see the SECURITY RULE
+    in memory/lessons.py)."""
     files = safe_files(files, real=real_files(repo_name))
-    msg = record_feedback(LessonStore(repo_name), {"question": question, "files": files}, positive)
-    if save_note_for_review(repo_name, question, positive, note):
-        msg += "; your note was saved for the maintainer to read"
-    return msg
+    return record_feedback(LessonStore(repo_name), {"question": question, "files": files}, positive)
 
 
 if __name__ == "__main__":

@@ -9,7 +9,7 @@ from collections import OrderedDict
 import anyio
 from fastapi import APIRouter, BackgroundTasks, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from ..agents.team import cited_files, run_team, submit_feedback
 from ..config import (ADD_REPO_PER_DAY, ADD_REPO_PER_HOUR, ASK_PER_DAY, ASK_PER_MINUTE,
@@ -50,9 +50,11 @@ class AddRepoBody(BaseModel):
 
 
 class FeedbackBody(BaseModel):
+    # Only a yes/no rating of an answer the server gave. No free text is accepted at all, and any
+    # extra field (an old "note", a "question", ...) is refused with 422 instead of silently ignored.
+    model_config = ConfigDict(extra="forbid")
     request_id: str = Field(max_length=64)
     helpful: bool
-    note: str = Field("", max_length=1000)  # saved for the maintainer to READ; never put in a prompt
 
 
 class StopBody(BaseModel):
@@ -203,5 +205,5 @@ def feedback(body: FeedbackBody, request: Request) -> dict:
         if answer["rated"]:
             raise HTTPException(409, "This answer was already rated.")
         answer["rated"] = True
-    msg = submit_feedback(answer["repo"], answer["question"], answer["files"], body.helpful, body.note)
+    msg = submit_feedback(answer["repo"], answer["question"], answer["files"], body.helpful)
     return {"message": msg}
