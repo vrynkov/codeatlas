@@ -195,11 +195,28 @@ python -m eval.compare_lessons requests   # measures the self-improvement effect
 python -m eval.make_chart requests        # renders a before/after chart
 ```
 
-### Self-improvement, measured (on `requests`, older eval)
+### Self-improvement, measured (CodeAtlas's own code, 2026-11-11)
 
-These runs used the older eval (the Critic was the same model as the writer, and a broken review counted as a pass), on a repo the models have memorized. A re-run on CodeAtlas's own code is planned.
+Does the lessons memory actually help? [`compare_lessons.py`](backend/eval/compare_lessons.py) asks the same 10 code questions twice: **BEFORE** with all lessons cleared, then **AFTER** right away, so the lessons saved during the first pass are available. Both passes use the current, stricter eval (a different model grades, and a broken review counts as a fail).
 
-`compare_lessons.py` runs the same questions twice: once with lessons cleared, once immediately after (so any lessons saved during the first pass are available). Across four independent runs:
+| Metric | BEFORE (no lessons) | AFTER (with lessons) | Change |
+|---|---|---|---|
+| Passed review | 70% | 70% | same |
+| Average critic score | 4.62 | 4.62 | same |
+| Needed a retry | 20% | 10% | 1 fewer question |
+| Cited the expected file as `file:line` | 70% | 80% | 1 more question |
+| Mentioned the expected keyword | 70% | 80% | 1 more question |
+| Every cited `file:line` really exists | 100% (52) | 100% (54) | same |
+| Invented file paths (caught and labelled) | 2 | 1 | 1 fewer |
+| Routing accuracy | 90% | 90% | same |
+| Errors | 1 | 1 | same |
+| Models that wrote the answers | 120b ×8, 20b ×2 | 120b ×6, 20b ×4 | AFTER used the smaller model more |
+
+**Honest read: no clear effect yet.** Every change is exactly one question out of ten, and the two identical team runs above already moved by two questions (90% → 70%) on their own. So these differences are within normal run-to-run noise. Two things point the same way, but can't prove anything alone: nothing got worse, and AFTER did slightly better even though more of its answers came from the smaller model. Proving a real effect would need several runs, or more questions, on one model.
+
+#### Earlier self-improvement runs on `requests` (older eval)
+
+These four runs used the older eval (the Critic was the same model as the writer, and a broken review counted as a pass), on a repo the models have memorized. Kept for history:
 
 | Run | Critic score | Retry rate | Citation accuracy |
 |---|---|---|---|
@@ -222,7 +239,7 @@ Three of four runs show a net positive lean; one shows a net negative one. Chart
 - **Paraphrased questions can get a thinner answer.** The same underlying question asked in different words sometimes leads the Researcher to under-explore compared to the original phrasing, even though the answer given is still accurate.
 - **Free-tier daily token quotas are real and tight.** `openai/gpt-oss-120b` and `openai/gpt-oss-20b` each get a separate 200K-token/day budget on Groq's free tier. CodeAtlas automatically falls back across a chain of models when one is exhausted ([`app/agents/llm.py`](backend/app/agents/llm.py)) and clearly reports the switch, but an eval run split across models mid-run is a real, disclosed constraint of building on free infrastructure, not a hidden one.
 - **Reasoning models have hidden costs.** `openai/gpt-oss-120b` generates internal "thinking" tokens that count against quota even for a trivial prompt — a plain 1-token diagnostic probe is not actually free to run against it.
-- **The self-improvement comparison leans positive but isn't fully consistent (see the table above).** The one net-negative run (Run 2) had a notably small sample (4 vs. 8 fully-scored questions, since the BEFORE pass hit the daily quota early), a model change mid-experiment (`gpt-oss-20b` → `qwen-3.8-27b` as the day's quota shifted), and unusually heavy rate-limiting throughout — real free-tier conditions that make a clean comparison hard, not a flaw specific to that run alone (every run above has some version of this). A controlled re-test — one model, full sample, run when quota is fresh — is the next step toward a confident answer.
+- **The self-improvement effect is not proven.** On CodeAtlas's own code, one comparison showed no change in pass rate or critic score and one-question gains elsewhere, which is within noise (see above). On the older `requests` runs, the one net-negative run (Run 2) had a notably small sample (4 vs. 8 fully-scored questions, since the BEFORE pass hit the daily quota early), a model change mid-experiment (`gpt-oss-20b` → `qwen-3.8-27b` as the day's quota shifted), and unusually heavy rate-limiting throughout — real free-tier conditions that make a clean comparison hard, not a flaw specific to that run alone (every run above has some version of this). A controlled re-test — one model, full sample, run when quota is fresh — is the next step toward a confident answer.
 
 ## Running it publicly: abuse protections
 
