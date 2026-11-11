@@ -22,4 +22,28 @@ jobs:
       # The CPU-only PyTorch index keeps the install small (no multi-GB GPU wheels). The tests never
       # load the embedding model or call Groq/GitHub, so no secrets are needed.
       - run: pip install --extra-index-url https://download.pytorch.org/whl/cpu -r requirements.txt -r requirements-dev.txt
-      - run: pytest
+      - name: Run pytest
+        shell: bash
+        run: |
+          set -o pipefail                      # if pytest fails, this step still fails
+          pytest 2>&1 | tee pytest-output.txt  # show the output AND save a copy for the summary
+      # Writes a short result (e.g. "122 passed in 9.10s") to the run's Summary page, so the test
+      # count is one click from the README badge. Runs even when tests fail (if: always()).
+      - name: Write test summary
+        if: always()
+        shell: bash
+        run: |
+          [ -f pytest-output.txt ] || exit 0
+          result=$(tail -n 1 pytest-output.txt | tr -d '=' | xargs)
+          if grep -qE '(^| )[0-9]+ (failed|error)' <<< "$result"; then icon="❌"; else icon="✅"; fi
+          {
+            echo "## $icon Tests: $result"
+            failed=$(grep -E '^(FAILED|ERROR) ' pytest-output.txt || true)
+            if [ -n "$failed" ]; then
+              echo ""
+              echo "### What failed"
+              echo '```'
+              echo "$failed"
+              echo '```'
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
