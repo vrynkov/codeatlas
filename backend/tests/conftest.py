@@ -55,16 +55,14 @@ class FakeLessonStore:
 
 @pytest.fixture(autouse=True)
 def isolated_state(tmp_path, monkeypatch):
-    """Every test starts clean: no leftover rate-limit counters, dead models, answers or notes,
+    """Every test starts clean: no leftover rate-limit counters, dead models or answers,
     and nothing is written into the real backend/data folder."""
     from app.agents import llm
     from app.api import limiter, routes
-    from app.memory import lessons
 
     monkeypatch.setattr(llm, "_STATE_FILE", tmp_path / "model_state.json")
     monkeypatch.setattr(llm, "_STATE", {"dead": set()})
     monkeypatch.setattr(llm, "_LAST_USED", {"model": llm.MODEL_CHAIN[0]})
-    monkeypatch.setattr(lessons, "NOTES_FILE", tmp_path / "notes.jsonl")
     limiter.limiter.reset()
     routes._ANSWERS.clear()
     yield

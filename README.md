@@ -251,7 +251,7 @@ The demo server is open to anyone, so it defends itself (all limits are settings
 - **Size caps.** GitHub's API size is checked before downloading, the clone has a time limit, the downloaded size is checked again, and repos with too many code chunks to embed are refused. Only one repo indexes at a time.
 - **No silent replacement.** `github.com/someone-else/codeatlas` can't overwrite the indexed `vrynkov/codeatlas`, because folders are named by repo name.
 - **Rate limits per visitor** (in memory, free): a few questions per minute and per day, a few new repos per hour. This works because the app runs as a single instance (`--max-instances=1`); it resets on restart.
-- **No prompt injection through feedback.** Lessons are pasted into future prompts, so they're built only from fixed sentences, real file paths, and filtered search words. The free-text note goes to `data/feedback_notes.jsonl` for a human to read (`python -m app.memory.lessons notes`) and never reaches a model. Feedback is accepted only for an answer the server actually gave (looked up by its request id), once.
+- **No prompt injection through feedback.** Lessons are pasted into future prompts, so they're built only from fixed sentences, real file paths, and filtered search words. Feedback is a yes/no rating only: the API refuses any free-text field, so there is no typed text to leak into a prompt. Feedback is accepted only for an answer the server actually gave (looked up by its request id), once.
 
 ## Project structure
 
