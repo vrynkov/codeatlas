@@ -174,7 +174,7 @@ function renderAnswer(text, repoUrl, repoCommit) {
 }
 
 export default function ChatPanel({ repo, repoUrl, repoCommit, indexing, onTrace, onWorking }) {
-  const [messages, setMessages] = useState([]); // {role, text, files?}
+  const [messages, setMessages] = useState([]); // {role, text, question?, requestId?, rated?}
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
   const stopRef = useRef(null);
@@ -205,9 +205,8 @@ export default function ChatPanel({ repo, repoUrl, repoCommit, indexing, onTrace
         traceRef.current.push(ev);
         onTrace([...traceRef.current]);
       },
-      onDone: (answer) => {
-        const files = [...new Set([...answer.matchAll(/([\w./-]+\.\w{1,4}):\d+/g)].map((m) => m[1]))];
-        setMessages((m) => [...m, { role: "assistant", text: answer, question, files, rated: null }]);
+      onDone: (answer, requestId) => {
+        setMessages((m) => [...m, { role: "assistant", text: answer, question, requestId, rated: null }]);
         setBusy(false);
         onWorking(false);
       },
@@ -239,7 +238,7 @@ export default function ChatPanel({ repo, repoUrl, repoCommit, indexing, onTrace
 
   function rate(i, helpful) {
     const msg = messages[i];
-    sendFeedback(repo, msg.question, msg.files || [], helpful);
+    sendFeedback(msg.requestId, helpful);
     setMessages((m) => m.map((mm, idx) => (idx === i ? { ...mm, rated: helpful } : mm)));
   }
 

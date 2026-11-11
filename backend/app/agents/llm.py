@@ -38,6 +38,18 @@ if _env_chain.strip():
 else:
     MODEL_CHAIN = [GROQ_MODEL] + [m for m in _DEFAULT_CHAIN if m != GROQ_MODEL]
 
+# The CRITIC (the agent that grades answers) should NOT be the same model that wrote the answer:
+# a model grading its own work is too forgiving ("self-grading"). So the critic starts from a
+# DIFFERENT model - by default the chain rotated by one (e.g. qwen first instead of gpt-oss-120b) -
+# and only falls back to the others if that one is rate limited. The eval reports when that
+# fallback made the critic and the writer the same model, so it's never hidden.
+# Override with CRITIC_MODEL_CHAIN="a,b,c" in .env.
+_env_critic = os.getenv("CRITIC_MODEL_CHAIN", "")
+if _env_critic.strip():
+    CRITIC_MODEL_CHAIN = [m.strip() for m in _env_critic.split(",") if m.strip()]
+else:
+    CRITIC_MODEL_CHAIN = MODEL_CHAIN[-1:] + MODEL_CHAIN[:-1] if len(MODEL_CHAIN) > 1 else list(MODEL_CHAIN)
+
 _STATE_FILE = BACKEND_DIR / "data" / "model_fallback_state.json"
 
 
@@ -46,30 +58,31 @@ def _today() -> str:
 
 
 def _load_state() -> dict:
-    """Only tracks PERMANENT (daily) exhaustion - "active" is where to START searching from
-    (skip past models already confirmed dead today), "dead" is the confirmed-dead set itself."""
+    """Only tracks PERMANENT (daily) exhaustion: the set of model NAMES confirmed dead today.
+    Names, not positions in a list - the writer and the critic use differently ordered chains,
+    so "model #0 is dead" would mean a different model to each of them."""
     try:
         data = json.loads(_STATE_FILE.read_text())
         if data.get("date") == _today():
-            return {"active": data.get("active", 0), "dead": set(data.get("dead", []))}
+            # isinstance check: older versions of this file stored list positions (ints) - ignore those
+            return {"dead": {m for m in data.get("dead", []) if isinstance(m, str)}}
     except (FileNotFoundError, json.JSONDecodeError, OSError):
         pass
-    return {"active": 0, "dead": set()}
+    return {"dead": set()}
 
 
 def _save_state(state: dict) -> None:
     try:
         _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-        _STATE_FILE.write_text(json.dumps(
-            {"date": _today(), "active": state["active"], "dead": sorted(state["dead"])}))
+        _STATE_FILE.write_text(json.dumps({"date": _today(), "dead": sorted(state["dead"])}))
     except OSError:
         pass  # best-effort only; a failed write just means we might retry a dead model once more
 
 
 _STATE = _load_state()  # persistent (daily-dead tracking), shared by every instance in this process
-_LAST_USED = {"idx": _STATE["active"]}  # per-call reporting only, NEVER written to disk - a
-                                        # transient reroute updates this so reporting is accurate,
-                                        # but must not redirect where FUTURE calls start from
+# Which model most recently answered a WRITER call (reporting only, never written to disk). The
+# critic's calls don't touch this, so "which model answered" never reports the critic's model.
+_LAST_USED = {"model": next((m for m in MODEL_CHAIN if m not in _STATE["dead"]), MODEL_CHAIN[-1] if MODEL_CHAIN else "")}
 
 
 def _make_client(model: str, temperature: float):
@@ -100,13 +113,16 @@ class MultiModelChatGroq:
     MAX_QUICK_RETRIES = 3     # caps same-model short waits so a persistent run of them still
                               # eventually falls through to rerouting instead of waiting forever.
 
-    def __init__(self, models: list[str] | None = None, temperature: float = 0, tools=None):
+    def __init__(self, models: list[str] | None = None, temperature: float = 0, tools=None,
+                 report: bool = True):
         self.models = models or MODEL_CHAIN
         self.temperature = temperature
         self.tools = tools
+        self.report = report      # False for the critic: its model must not show up as "who answered"
+        self.last_model = None    # the model that answered THIS instance's most recent call
 
     def bind_tools(self, tools, **kw):
-        return MultiModelChatGroq(self.models, self.temperature, tools=tools)
+        return MultiModelChatGroq(self.models, self.temperature, tools=tools, report=self.report)
 
     def _client_for(self, idx: int):
         client = _make_client(self.models[idx], self.temperature)
@@ -136,15 +152,15 @@ class MultiModelChatGroq:
     def _next_viable(self, after_idx: int) -> int | None:
         """The next index after `after_idx` that isn't already confirmed dead for today."""
         idx = after_idx + 1
-        while idx < len(self.models) and idx in _STATE["dead"]:
+        while idx < len(self.models) and self.models[idx] in _STATE["dead"]:
             idx += 1
         return idx if idx < len(self.models) else None
 
     def invoke(self, messages, **kwargs):
         last_err = None
-        idx = _STATE["active"]
+        idx = 0
         while idx < len(self.models):
-            if idx in _STATE["dead"]:
+            if self.models[idx] in _STATE["dead"]:
                 idx += 1
                 continue
 
@@ -152,10 +168,12 @@ class MultiModelChatGroq:
             while True:  # may retry THIS SAME idx a bounded number of times before moving on
                 try:
                     result = self._timed_invoke(idx, messages, **kwargs)
-                    if idx != _LAST_USED["idx"]:
-                        log.info("model_switched", model=self.models[idx])
-                        _emit_switch(self.models[idx])
-                    _LAST_USED["idx"] = idx  # for reporting only - see module docstring
+                    self.last_model = self.models[idx]
+                    if self.report:
+                        if self.models[idx] != _LAST_USED["model"]:
+                            log.info("model_switched", model=self.models[idx])
+                            _emit_switch(self.models[idx])
+                        _LAST_USED["model"] = self.models[idx]  # for reporting only - see module docstring
                     return result
                 except Exception as e:  # noqa: BLE001
                     text = str(e)
@@ -177,8 +195,7 @@ class MultiModelChatGroq:
                         # Confirmed exhausted for the whole day - a dead end no matter how long
                         # we wait, so this DOES persist (across questions, even across separate
                         # process runs via the state file): never try this model again today.
-                        _STATE["dead"].add(idx)
-                        _STATE["active"] = idx + 1
+                        _STATE["dead"].add(self.models[idx])
                         _save_state(_STATE)
                         next_name = self.models[next_idx] if next_idx is not None else "no more models configured"
                         log.warning("model_fallback", model=self.models[idx], next_model=next_name,
@@ -231,8 +248,7 @@ class MultiModelChatGroq:
 def active_model_name() -> str:
     """Whichever model most recently answered a call, in THIS process. Used for reporting only -
     never for deciding where the next call should start searching from (see _STATE for that)."""
-    idx = _LAST_USED["idx"]
-    return MODEL_CHAIN[idx] if idx < len(MODEL_CHAIN) else MODEL_CHAIN[-1]
+    return _LAST_USED["model"]
 
 
 def _emit_switch(model: str) -> None:
@@ -248,3 +264,9 @@ def _emit_switch(model: str) -> None:
 
 def get_llm(temperature: float = 0) -> MultiModelChatGroq:
     return MultiModelChatGroq(temperature=temperature)
+
+
+def get_critic_llm() -> MultiModelChatGroq:
+    """The critic's own model pool: starts from a different model than the writer (see
+    CRITIC_MODEL_CHAIN above) and never changes what active_model_name() reports."""
+    return MultiModelChatGroq(models=CRITIC_MODEL_CHAIN, temperature=0, report=False)

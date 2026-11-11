@@ -11,19 +11,26 @@ import json
 import sys
 from pathlib import Path
 
+from app.config import PASS_SCORE
+
 from .harness import _FILE_RE
-from .run_eval import QUESTIONS, print_summary, summarize
+from .run_eval import print_summary, questions_for, summarize
 
 
 def rescore(path: str) -> None:
     data = json.loads(Path(path).read_text())
-    items = {q["id"]: q for q in json.loads(QUESTIONS.read_text())}
+    repo = Path(path).stem.split("-")[0]  # results files are named <repo>-<date>-<time>.json
+    items = {q["id"]: q for q in questions_for(repo)}
     rows = []
     for row in data["rows"]:
         item = items.get(row["id"])
         if not item or item["expected_route"] != "research" or "answer" not in row:
             rows.append(row)  # chat rows, or rows saved before the "answer" field existed
             continue
+        if "passed" not in row:  # files saved before the honest pass/fail field existed
+            score = row.get("critic_score")
+            row = {**row, "passed": not row.get("error") and row.get("route") == "research"
+                   and score is not None and score >= PASS_SCORE}
         cited = sorted({f.split("/")[-1] for f in _FILE_RE.findall(row["answer"])})
         exp_files = item.get("expected_files", [])
         row = {**row,
