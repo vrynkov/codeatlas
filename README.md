@@ -100,7 +100,7 @@ python -m venv .venv
 .venv\Scripts\activate.bat        # Windows; use source .venv/bin/activate on Mac/Linux
 pip install -r requirements.txt
 cp .env.example .env              # then add your free Groq API key from console.groq.com
-python -m app.indexing.indexer index https://github.com/psf/requests
+python -m app.indexing.indexer index https://github.com/vrynkov/codeatlas
 uvicorn app.main:app --reload
 ```
 
@@ -110,7 +110,7 @@ cd frontend
 npm install
 npm run dev
 ```
-Open the URL Vite prints, pick `requests` from the left rail, and ask a question.
+Open the URL Vite prints, pick `codeatlas` from the left rail, and ask a question (for example "How does the critic decide whether to retry?").
 
 **Run the tests** (offline and free: the AI model, GitHub and the embedding model are all replaced by fakes, so no API key or network is needed):
 ```bash
@@ -123,7 +123,7 @@ They cover the agent loop (retry, give-up, broken-review handling), model fallba
 **Try the MCP server** (see [`scripts/mcp_client_demo.py`](backend/scripts/mcp_client_demo.py)):
 ```bash
 cd backend
-python scripts/mcp_client_demo.py requests "How are retries handled?"
+python scripts/mcp_client_demo.py codeatlas "How does the rate limiter work?"
 ```
 
 ## Evaluation results
@@ -142,7 +142,8 @@ An eval that grades itself proves little, so:
 python -m app.indexing.indexer index https://github.com/vrynkov/codeatlas
 python -m eval.run_eval codeatlas     # the full team
 python -m eval.baseline codeatlas     # the same model, no search
-python -m eval.baseline requests      # shows how much of the requests score is memory
+# optional, needs `indexer index https://github.com/psf/requests` first:
+python -m eval.baseline requests      # a famous repo: shows how much of a score is memory
 ```
 
 ### Results on CodeAtlas's own code (2026-11-10, two runs)
@@ -175,9 +176,9 @@ python -m eval.baseline requests      # shows how much of the requests score is 
 - **Free-tier conditions:** answers came from three models (run 1: gpt-oss-120b ×7, gpt-oss-20b ×3, qwen ×2; run 2: ×6, ×3, ×3) because of per-minute limits. In each run one answer was graded by the same model that wrote it, and the eval flags that.
 - **Small sample, real variance:** 10 code questions, so one question is 10 points. Between two identical runs, "cited the expected file" moved from 90% to 70%. Treat these as ranges, not precise rates. The gap to the no-search baseline (0–10%) holds in both runs.
 
-### Earlier results on `requests`
+### Earlier results on `requests` (older, less strict eval)
 
-Measured before the changes above (same model as Critic; a broken review was counted as a pass), on a 14-question set against `psf/requests` (10 code questions + 4 routing/chat checks), on `openai/gpt-oss-120b`:
+Kept for history; the CodeAtlas results above are the ones to trust. Measured before the changes above (same model as Critic; a broken review was counted as a pass), on a 14-question set against `psf/requests` (10 code questions + 4 routing/chat checks), on `openai/gpt-oss-120b`:
 
 | Metric | Result |
 |---|---|
@@ -194,7 +195,9 @@ python -m eval.compare_lessons requests   # measures the self-improvement effect
 python -m eval.make_chart requests        # renders a before/after chart
 ```
 
-### Self-improvement, measured
+### Self-improvement, measured (on `requests`, older eval)
+
+These runs used the older eval (the Critic was the same model as the writer, and a broken review counted as a pass), on a repo the models have memorized. A re-run on CodeAtlas's own code is planned.
 
 `compare_lessons.py` runs the same questions twice: once with lessons cleared, once immediately after (so any lessons saved during the first pass are available). Across four independent runs:
 
@@ -227,7 +230,7 @@ The demo server is open to anyone, so it defends itself (all limits are settings
 
 - **Only public GitHub repos.** URLs must look like `https://github.com/<owner>/<repo>`; anything else (`file://`, other hosts, `--option` tricks, `..`) is refused before git runs, and the clone URL is rebuilt from the checked parts.
 - **Size caps.** GitHub's API size is checked before downloading, the clone has a time limit, the downloaded size is checked again, and repos with too many code chunks to embed are refused. Only one repo indexes at a time.
-- **No silent replacement.** `github.com/someone-else/requests` can't overwrite the indexed `psf/requests`, because folders are named by repo name.
+- **No silent replacement.** `github.com/someone-else/codeatlas` can't overwrite the indexed `vrynkov/codeatlas`, because folders are named by repo name.
 - **Rate limits per visitor** (in memory, free): a few questions per minute and per day, a few new repos per hour. This works because the app runs as a single instance (`--max-instances=1`); it resets on restart.
 - **No prompt injection through feedback.** Lessons are pasted into future prompts, so they're built only from fixed sentences, real file paths, and filtered search words. The free-text note goes to `data/feedback_notes.jsonl` for a human to read (`python -m app.memory.lessons notes`) and never reaches a model. Feedback is accepted only for an answer the server actually gave (looked up by its request id), once.
 
