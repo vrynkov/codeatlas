@@ -124,6 +124,14 @@ class MultiModelChatGroq:
     def bind_tools(self, tools, **kw):
         return MultiModelChatGroq(self.models, self.temperature, tools=tools, report=self.report)
 
+    def avoiding(self, model: str | None) -> "MultiModelChatGroq":
+        """A copy that tries `model` LAST. The critic uses this so it never starts on the model that
+        just wrote the answer - even when the writer itself had fallen back to another model."""
+        if not model or model not in self.models:
+            return self
+        order = [m for m in self.models if m != model] + [model]
+        return MultiModelChatGroq(order, self.temperature, tools=self.tools, report=self.report)
+
     def _client_for(self, idx: int):
         client = _make_client(self.models[idx], self.temperature)
         return client.bind_tools(self.tools) if self.tools else client

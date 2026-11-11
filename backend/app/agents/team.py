@@ -230,12 +230,14 @@ def build_team_graph(repo_name: str, llm, critic_llm=None):
     def critic(state: TeamState):
         user = (f"QUESTION:\n{state['question']}\n\nEVIDENCE:\n{_evidence_text(state['evidence'])}\n\n"
                 f"ANSWER:\n{state['draft']}")
-        data = _ask_json(critic_llm, CRITIC_PROMPT, user)
+        # Never grade with the model that just wrote the draft (it may have fallen back mid-question).
+        judge = critic_llm.avoiding(active_model_name()) if hasattr(critic_llm, "avoiding") else critic_llm
+        data = _ask_json(judge, CRITIC_PROMPT, user)
         score = _parse_score(data)
         if score is None:  # broken review: ask ONCE more, very explicitly
-            data = _ask_json(critic_llm, CRITIC_PROMPT, user + _CRITIC_RETRY_NUDGE)
+            data = _ask_json(judge, CRITIC_PROMPT, user + _CRITIC_RETRY_NUDGE)
             score = _parse_score(data)
-        critic_model = getattr(critic_llm, "last_model", None)
+        critic_model = getattr(judge, "last_model", None)
         if critic_model:
             _emit("critic", "model", critic_model)  # the eval checks it differs from the writer's model
         if score is None:
