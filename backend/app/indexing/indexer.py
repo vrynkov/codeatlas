@@ -366,18 +366,6 @@ def search(repo_name: str, query: str, n: int = 5) -> list[dict]:
     ]
 
 
-if __name__ == "__main__":
-    if len(sys.argv) >= 3 and sys.argv[1] == "index":
-        print("Done:", index_repo(sys.argv[2]), "chunks stored.")
-    elif len(sys.argv) >= 4 and sys.argv[1] == "search":
-        for r in search(sys.argv[2], sys.argv[3]):
-            m = r["meta"]
-            print(f"\n== {m['file']}  lines {m['start_line']}-{m['end_line']}  ({m['kind']})  distance={r['distance']:.3f}")
-            print("\n".join(r["text"].splitlines()[:8]), "\n   ...")
-    else:
-        print(__doc__)
-
-
 def repo_source_url(name: str) -> str | None:
     """Reads the repo's original clone URL straight from its own git config, so the UI can
     show something unambiguous (GitHub repo names collide a lot - many orgs have a "requests")
@@ -406,3 +394,15 @@ def repo_source_commit(name: str) -> str | None:
         return sha or None
     except Exception:  # noqa: BLE001  purely cosmetic info - never worth failing a request over
         return None
+
+
+if __name__ == "__main__":
+    if len(sys.argv) >= 3 and sys.argv[1] == "index":
+        print("Done:", index_repo(sys.argv[2]), "chunks stored.")
+    elif len(sys.argv) >= 4 and sys.argv[1] == "search":
+        for r in search(sys.argv[2], sys.argv[3]):
+            m = r["meta"]
+            print(f"\n== {m['file']}  lines {m['start_line']}-{m['end_line']}  ({m['kind']})  distance={r['distance']:.3f}")
+            print("\n".join(r["text"].splitlines()[:8]), "\n   ...")
+    else:
+        print(__doc__)
