@@ -145,6 +145,35 @@ python -m eval.baseline codeatlas     # the same model, no search
 python -m eval.baseline requests      # shows how much of the requests score is memory
 ```
 
+### Results on CodeAtlas's own code (2026-11-10)
+
+12 questions (10 about the code, 2 small-talk routing checks). These questions are about code no model has seen before.
+
+**Team vs. the same model with no search:**
+
+| Outside check (no AI involved) | CodeAtlas team | Same model, no search |
+|---|---|---|
+| Named the expected file | **90%** | 10% |
+| Cited the expected file as `file:line` | **90%** | 0% |
+| Every cited `file:line` really exists | **100%** (59 citations) | 0% |
+| Mentioned the expected keyword | 90% | 70% |
+
+**The team's own scorecard:**
+
+| Metric | Result |
+|---|---|
+| Passed review (a broken review, misroute or error counts as a fail) | 80% (8 of 10) |
+| Average critic score (over the 9 readable reviews) | 4.44 / 5 |
+| Needed a retry | 30% |
+| Routing accuracy | 92% (11 of 12) |
+
+**How to read this honestly:**
+- **Search is what makes the answers checkable.** Without search, the model guesses believable answers but almost never names the right file, and none of its citations point to real lines.
+- **Keyword checks are weak evidence.** The no-search model still hit 70%, because words like "score" or "lesson" are easy to guess. The file and citation checks are the ones that separate real answers from guesses.
+- **The 100% "citations exist" is partly built in.** The app removes links to invented files before showing an answer ([`team.py`](backend/app/agents/team.py)). The line ranges still get a real check.
+- **Free-tier conditions:** answers came from three models (gpt-oss-120b ×7, gpt-oss-20b ×3, qwen ×2) because of per-minute limits. One answer was graded by the same model that wrote it, and the eval flags that.
+- **Small sample:** 10 code questions, one run. Treat these as indicators, not precise rates.
+
 ### Earlier results on `requests`
 
 Measured before the changes above (same model as Critic; a broken review was counted as a pass), on a 14-question set against `psf/requests` (10 code questions + 4 routing/chat checks), on `openai/gpt-oss-120b`:
