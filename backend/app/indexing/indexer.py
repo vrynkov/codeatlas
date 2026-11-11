@@ -2,7 +2,7 @@
 
 Run from the backend/ folder:
     python -m app.indexing.indexer index https://github.com/vrynkov/codeatlas
-    python -m app.indexing.indexer search requests "how are retries handled?"
+    python -m app.indexing.indexer search codeatlas "how does the rate limiter work?"
 """
 import json
 import os
