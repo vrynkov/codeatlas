@@ -170,7 +170,7 @@ python -m eval.baseline requests      # shows how much of the requests score is 
 **How to read this honestly:**
 - **Search is what makes the answers checkable.** Without search, the model guesses believable answers but almost never names the right file, and none of its citations point to real lines.
 - **Keyword checks are weak evidence.** The no-search model still hit 70%, because words like "score" or "lesson" are easy to guess. The file and citation checks are the ones that separate real answers from guesses.
-- **The 100% "citations exist" is partly built in.** The app removes links to invented files before showing an answer ([`team.py`](backend/app/agents/team.py)). The line ranges still get a real check.
+- **The 100% "citations exist" is partly built in.** Before an answer is shown, the app turns any made-up file path into plain text marked "(not found in this repo)" ([`team.py`](backend/app/agents/team.py)), so those never reach the citation check. The eval now counts them separately as "Invented file paths" (this run predates that counter). The line ranges still get a real check.
 - **Free-tier conditions:** answers came from three models (gpt-oss-120b ×7, gpt-oss-20b ×3, qwen ×2) because of per-minute limits. One answer was graded by the same model that wrote it, and the eval flags that.
 - **Small sample:** 10 code questions, one run. Treat these as indicators, not precise rates.
 

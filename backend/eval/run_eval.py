@@ -104,6 +104,7 @@ def summarize(rows: list[dict]) -> dict:
         "keyword_hit_rate": _rate(research, "keyword_hit"),
         "citations": cites,
         "valid_citation_rate": sum(r.get("valid_citations", 0) for r in research) / cites if cites else None,
+        "invented_paths": sum(r.get("invented_paths", 0) for r in research),
         "errors": sum(1 for r in rows if r.get("error")),
     }
 
@@ -142,6 +143,9 @@ def print_summary(title: str, s: dict) -> None:
         if s.get("citations"):
             print(f"Citations that exist: {_pct(s['valid_citation_rate'])}  ({s['citations']} file:line citations "
                   f"checked against the real files - no AI involved)")
+        if "invented_paths" in s:
+            print(f"Invented file paths: {s['invented_paths']}  (made-up files the app caught and labelled "
+                  f"'not found' - not counted in the line above)")
     if s["errors"]:
         print(f"Errors             : {s['errors']}")
 

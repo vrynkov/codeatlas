@@ -56,6 +56,18 @@ def test_misrouted_research_question_is_a_fail_not_dropped():
     assert s["pass_rate"] == 0.5 and s["avg_critic_score"] == 5
 
 
+def test_invented_paths_caught_by_the_filter_are_counted(monkeypatch):
+    monkeypatch.setattr(harness, "run_team", fake_run([
+        {"agent": "supervisor", "type": "route", "text": "research"},
+        {"agent": "critic", "type": "review", "text": "score 5/5"},
+        {"agent": "team", "type": "answer",
+         "text": "see a.py:1 and x/login.py (not found in this repo) and y.py (not found in this repo)"},
+    ]))
+    row = score_item(ITEM, run_one("demo", ITEM))
+    assert row["invented_paths"] == 2
+    assert summarize([row])["invented_paths"] == 2
+
+
 def test_citation_check_catches_invented_files_and_lines(tmp_path):
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.py").write_text("1\n2\n3\n")
