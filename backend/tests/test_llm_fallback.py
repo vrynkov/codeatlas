@@ -95,3 +95,24 @@ def test_old_state_file_with_list_positions_is_ignored(tmp_path, monkeypatch):
     f.write_text(json.dumps({"date": llm._today(), "active": 1, "dead": [0]}))
     monkeypatch.setattr(llm, "_STATE_FILE", f)
     assert llm._load_state() == {"dead": set()}
+
+
+def test_avoiding_moves_the_writers_model_to_the_end():
+    critic = llm.MultiModelChatGroq(models=["a", "b", "c"], report=False)
+    assert critic.avoiding("a").models == ["b", "c", "a"]
+    assert critic.avoiding("unknown").models == ["a", "b", "c"]
+    assert critic.avoiding(None) is critic
+    assert critic.avoiding("b").report is False  # still never reported as "who answered"
+
+
+def test_critic_avoids_the_writer_even_after_the_writer_fell_back(fake_groq):
+    failures, log = fake_groq
+    first, second, last = llm.MODEL_CHAIN
+    failures[first] = failures[second] = MINUTE  # the writer gets pushed to the last model...
+    llm.get_llm().invoke([HumanMessage("write")])
+    assert llm.active_model_name() == last
+    failures.clear()
+    assert llm.CRITIC_MODEL_CHAIN[0] == last     # ...which is exactly where the critic would start
+    critic = llm.get_critic_llm().avoiding(llm.active_model_name())
+    critic.invoke([HumanMessage("grade")])
+    assert critic.last_model != last             # so it grades with a different model instead

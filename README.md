@@ -134,7 +134,8 @@ python scripts/mcp_client_demo.py codeatlas "How does the rate limiter work?"
 
 An eval that grades itself proves little, so:
 
-- **A different model grades the answer.** The Critic starts from a different model than the one that wrote the answer (`CRITIC_MODEL_CHAIN` in [`llm.py`](backend/app/agents/llm.py)). If rate limits force it onto the same model, the eval flags that answer as "self-graded".
+- **A different model grades the answer.** The Critic always tries the model that wrote the answer last, even when the writer had fallen back to another model mid-question (`CRITIC_MODEL_CHAIN` and `avoiding()` in [`llm.py`](backend/app/agents/llm.py)). Only if every other model is rate limited does it grade with the same one, and the eval flags that answer as "self-graded".
+  - **The trade-off:** the free chain has one large model (`gpt-oss-120b`), so when it writes, a smaller model grades. We accept that because the Critic's job is narrower than the writer's: it checks each claim against the code evidence pasted into its prompt, rather than answering from scratch. The alternative is a model grading its own work, which is worse. How often a stronger judge would disagree hasn't been measured yet.
 - **A broken review is a fail.** If the Critic returns something unreadable (twice), the answer is shown to the user as *Unverified* and the eval counts it as a **fail**, never a pass. Misrouted questions and errors also stay in the totals.
 - **Outside checks with no AI involved:** did the answer name the expected file and keyword, and does every `file:line` it cites really exist (the file is there and has those lines)?
 - **A repo the models can't have memorized.** `psf/requests` is in every model's training data, so a good score there partly measures memory. CodeAtlas's own code (written in 2026, after these models were trained) is the second test set: [`eval/questions_codeatlas.json`](backend/eval/questions_codeatlas.json).
