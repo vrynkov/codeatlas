@@ -212,6 +212,8 @@ Does the lessons memory actually help? [`compare_lessons.py`](backend/eval/compa
 | Errors | 1 | 1 | same |
 | Models that wrote the answers | 120b ×8, 20b ×2 | 120b ×6, 20b ×4 | AFTER used the smaller model more |
 
+![Before vs after lessons on CodeAtlas](backend/eval/results/codeatlas-lesson-comparison.png)
+
 **Honest read: no clear effect yet.** Every change is exactly one question out of ten, and the two identical team runs above already moved by two questions (90% → 70%) on their own. So these differences are within normal run-to-run noise. Two things point the same way, but can't prove anything alone: nothing got worse, and AFTER did slightly better even though more of its answers came from the smaller model. Proving a real effect would need several runs, or more questions, on one model.
 
 #### Earlier self-improvement runs on `requests` (older eval)
