@@ -2,13 +2,13 @@
 
 [![tests](https://github.com/vrynkov/codeatlas/actions/workflows/tests.yml/badge.svg)](https://github.com/vrynkov/codeatlas/actions/workflows/tests.yml)
 
-**An AI team that reads a GitHub repository and answers questions about it — with citations you can check, and answers that get better over time.**
+**An AI team that reads a public GitHub repository's code and docs and answers questions about it, with citations you can check.**
 
 Ask "How are retries handled?" about any indexed repo. A team of agents (built with LangChain and LangGraph) searches the actual code, reads it, writes an answer, and has a second agent check that answer against the evidence before you see it. The whole thing runs on free-tier infrastructure.
 
 ## Who it's for
 
-Developers spend far more time reading code than writing it — commonly 50–70% of the job. CodeAtlas is like a senior teammate who has already read the entire repo and never gets tired of your questions. It helps in the situations every developer hits:
+Developers spend far more time reading code than writing it. CodeAtlas is like a senior teammate who has already read the entire repo and never gets tired of your questions. It helps in the situations every developer hits:
 
 - **Day 1 at a new job:** a repo with 500 files, an outdated README, and the one person who understood it left last year.
 - **A vague bug report:** "Payments fail sometimes." Where in the code do you even start?
@@ -18,30 +18,32 @@ Developers spend far more time reading code than writing it — commonly 50–70
 ### Things you'd ask it
 
 - "Where is user login handled, and which files are involved?"
-- "Explain this architecture diagram in the docs and show me the matching code."
+- "The README says deployment uses Docker. Which code actually does it?"
 - "This error appears in production: `KeyError: 'user_id'`. What's the likely cause?"
-- "Which parts of the code will break if I change the `Order` class?"
+- "Where is the `Order` class used?"
 - "Write a beginner-friendly summary of this project for a new teammate."
 
 Every answer points to real files and line numbers, so you can check it instead of trusting blindly.
 
 ### Why not just search?
 
-Plain search (Ctrl+F) finds exact words — search "login" and you miss `authenticate_user` or `session_start`. CodeAtlas searches by **meaning**: it's like asking a librarian for "a book about sad dogs" and getting the right book even if the title never says "sad" or "dog". It also connects things that live in different places — the code, the docs, the diagrams, the issue discussions — which would otherwise mean five open tabs.
+Plain search (Ctrl+F) finds exact words — search "login" and you miss `authenticate_user` or `session_start`. CodeAtlas searches by **meaning**: it's like asking a librarian for "a book about sad dogs" and getting the right book even if the title never says "sad" or "dog". It also connects the code with the repo's written docs (Markdown, reStructuredText and text files), so you don't have to cross-check them by hand.
+
+**What it does not read (yet):** images and diagrams, GitHub issues and pull requests, commit history, and private repos. Python gets the most precise splitting (by function and class); other languages are split into fixed-size pieces.
 
 ### What it changes
 
 | Without CodeAtlas | With CodeAtlas |
 |---|---|
-| Onboarding takes weeks | Productive in days |
-| Hours hunting for the right file | Answer in seconds, with file links |
+| Reading a new repo file by file | A starting point: which files matter, with links |
+| Hunting for the right file | An answer with file and line links |
 | Interrupting a senior colleague | Ask the tool first |
 | Outdated docs nobody trusts | Answers come from the actual code |
 | Slow reviews of unfamiliar code | Quick explanation of what a change touches |
 
 ## Why this exists
 
-Most portfolio RAG projects are "upload a PDF, ask a question." This one is deliberately harder: it demonstrates hybrid retrieval, a real multi-agent pipeline with a self-critique loop, a working self-improvement mechanism, an MCP server other AI tools can plug into, and a measured evaluation — not just a demo that looks good once.
+Most portfolio RAG projects are "upload a PDF, ask a question." This one is deliberately harder: it demonstrates hybrid retrieval, a real multi-agent pipeline with a self-critique loop, a self-improvement mechanism (measured honestly below: no clear effect yet), an MCP server other AI tools can plug into, and a measured evaluation — not just a demo that looks good once.
 
 ## Architecture
 
@@ -89,7 +91,7 @@ flowchart LR
 | Backend | FastAPI, Server-Sent Events | Streams agent progress live to the browser |
 | Frontend | React (Vite) | No framework bloat |
 | Protocol | MCP (Model Context Protocol) | Other AI tools (Claude Desktop, MCP Inspector) can use CodeAtlas as a tool |
-| Eval | Custom harness, 14-question set | Routing accuracy, critic score, citation accuracy, self-improvement delta |
+| Eval | Custom harness; 12 questions on CodeAtlas itself (plus an older 14-question `requests` set) | Pass rate, routing accuracy, critic score, citation checks, no-search baseline, self-improvement delta |
 
 ## Quick start
 
