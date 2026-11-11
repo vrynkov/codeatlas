@@ -265,7 +265,7 @@ frontend/
 ```bash
 docker compose up --build
 ```
-This builds the React frontend, packages it with the FastAPI backend into one image (see the [`Dockerfile`](Dockerfile)), and serves everything from `http://localhost:7860`. On first boot, [`docker-entrypoint.sh`](docker-entrypoint.sh) automatically pre-indexes `psf/requests` so there's something to try immediately. You still need a `backend/.env` (copy [`backend/.env.example`](backend/.env.example) and add your `GROQ_API_KEY`) — [`docker-compose.yml`](docker-compose.yml) reads it at container start; it is never baked into the image (see [`.dockerignore`](.dockerignore)).
+This builds the React frontend, packages it with the FastAPI backend into one image (see the [`Dockerfile`](Dockerfile)), and serves everything from `http://localhost:7860`. On first boot, [`docker-entrypoint.sh`](docker-entrypoint.sh) automatically pre-indexes CodeAtlas itself (`vrynkov/codeatlas`) so there's something to try immediately. You still need a `backend/.env` (copy [`backend/.env.example`](backend/.env.example) and add your `GROQ_API_KEY`) — [`docker-compose.yml`](docker-compose.yml) reads it at container start; it is never baked into the image (see [`.dockerignore`](.dockerignore)).
 
 ## Deployment (Google Cloud Run)
 
@@ -300,7 +300,7 @@ gcloud run deploy codeatlas --source . --port 7860 --region us-central1
 
 ### Known limitation
 
-`data/` (the Chroma vector store) is **ephemeral** — it's wiped on redeploy or when Cloud Run scales an idle instance down to zero. Only the repo indexed by `docker-entrypoint.sh` on container boot (`psf/requests`, by default) survives automatically. Repos added manually through the UI will disappear after a scale-down. Setting `gcloud run services update codeatlas --region us-central1 --min-instances=1` keeps an instance warm (at a small ongoing cost) if persistence matters for a demo.
+`data/` (the Chroma vector store) is **ephemeral** — it's wiped on redeploy or when Cloud Run scales an idle instance down to zero. Only the repo indexed by `docker-entrypoint.sh` on container boot (`vrynkov/codeatlas`, by default) survives automatically. Repos added manually through the UI will disappear after a scale-down. Setting `gcloud run services update codeatlas --region us-central1 --min-instances=1` keeps an instance warm (at a small ongoing cost) if persistence matters for a demo.
 
 
 
