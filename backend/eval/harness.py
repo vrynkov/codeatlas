@@ -2,10 +2,12 @@
 by reading the same progress events the terminal and the MCP server already print.
 No extra AI calls needed: we reuse what the team already produces."""
 import re
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.agents.llm import MODEL_CHAIN
+from app.agents.llm import MODEL_CHAIN, usage_since, usage_snapshot
 from app.agents.team import NOT_FOUND_LABEL, run_team
 from app.config import PASS_SCORE, REPOS_DIR
 
@@ -21,6 +23,8 @@ class RunResult:
     cited_files: list = field(default_factory=list)
     models_used: list = field(default_factory=list)  # models switched TO during this question, in order
     error: str = ""
+    seconds: float = 0.0  # wall-clock time for the whole question, INCLUDING any rate-limit waits
+    usage: dict = field(default_factory=dict)  # calls, tokens, model-busy seconds (see llm.usage_since)
 
     @property
     def final_model(self) -> str:
@@ -52,8 +56,44 @@ _FILE_RE = re.compile(r"([\w./-]+\.\w{1,4})`?(?::\d|\s*\(?lines?\s+\d)", re.I)  
 _SCORE_RE = re.compile(r"score (\d)/5")
 
 
+@contextmanager
+def measured(r: RunResult):
+    """Records how long a question took and how many tokens/model calls it used, into `r`.
+    Counts EVERY call (supervisor, researcher, explainer, critic), because all of them cost quota."""
+    before, start = usage_snapshot(), time.perf_counter()
+    try:
+        yield
+    finally:
+        r.seconds = round(time.perf_counter() - start, 2)
+        r.usage = usage_since(before)
+
+
+def cost_fields(r: RunResult) -> dict:
+    u = r.usage or {}
+    return {"seconds": r.seconds, "llm_seconds": u.get("llm_seconds"), "llm_calls": u.get("calls"),
+            "input_tokens": u.get("input_tokens"), "output_tokens": u.get("output_tokens"),
+            "tokens": u.get("tokens"), "calls_by_model": u.get("by_model")}
+
+
+def cost_summary(rows: list[dict]) -> dict:
+    """Average cost per question. Only rows that were measured count (older result files weren't)."""
+    measured_rows = [r for r in rows if r.get("tokens") is not None]
+    def avg(key):
+        vals = [r[key] for r in measured_rows if r.get(key) is not None]
+        return round(sum(vals) / len(vals), 1) if vals else None
+    return {"n_measured": len(measured_rows), "avg_tokens": avg("tokens"), "avg_llm_calls": avg("llm_calls"),
+            "avg_seconds": avg("seconds"), "avg_llm_seconds": avg("llm_seconds")}
+
+
 def run_one(repo: str, item: dict, llm=None) -> RunResult:
     r = RunResult(id=item["id"], question=item["question"])
+    with measured(r):
+        _run_team_into(r, repo, item, llm)
+    r.cited_files = sorted({f.split("/")[-1] for f in _FILE_RE.findall(r.final)})
+    return r
+
+
+def _run_team_into(r: RunResult, repo: str, item: dict, llm) -> None:
     try:
         for ev in run_team(repo, item["question"], llm=llm):
             if ev["agent"] == "supervisor" and ev["type"] == "route":
@@ -71,8 +111,6 @@ def run_one(repo: str, item: dict, llm=None) -> RunResult:
                 r.final = ev["text"]
     except Exception as e:  # noqa: BLE001  a crash on one question shouldn't stop the eval run
         r.error = f"{type(e).__name__}: {e}"
-    r.cited_files = sorted({f.split("/")[-1] for f in _FILE_RE.findall(r.final)})
-    return r
 
 
 _CITE_RE = re.compile(r"([\w.\-/]+\.\w{1,4}):(\d+)(?:[-‑–—](\d+))?")
@@ -117,7 +155,8 @@ def score_item(item: dict, r: RunResult, repo: str | None = None) -> dict:
     than in the strict citation format, not that it got the wrong file."""
     out = {"id": r.id, "route_ok": r.route == item["expected_route"], "route": r.route,
            "model": r.final_model, "model_switched": r.final_model != MODEL_CHAIN[0], "error": r.error,
-           "answer": r.final}  # saved in full so a low score can actually be diagnosed later
+           "answer": r.final,  # saved in full so a low score can actually be diagnosed later
+           **cost_fields(r)}
     if item["expected_route"] != "research":
         return out
     text_low = r.final.lower()

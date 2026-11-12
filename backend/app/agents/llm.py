@@ -18,6 +18,7 @@ not make every future question start from the rerouted-to model.
 import json
 import os
 import time
+from collections import Counter
 from pathlib import Path
 
 from opentelemetry import trace
@@ -83,6 +84,35 @@ _STATE = _load_state()  # persistent (daily-dead tracking), shared by every inst
 # Which model most recently answered a WRITER call (reporting only, never written to disk). The
 # critic's calls don't touch this, so "which model answered" never reports the critic's model.
 _LAST_USED = {"model": next((m for m in MODEL_CHAIN if m not in _STATE["dead"]), MODEL_CHAIN[-1] if MODEL_CHAIN else "")}
+
+
+# Running totals of every SUCCESSFUL model call in this process (writer AND critic), for reporting
+# only: the eval reads them before and after a question to get "tokens and seconds per question".
+# A call that fails (a 429, an invalid tool call) isn't counted, so these are a slight UNDERcount.
+_USAGE = {"calls": 0, "input_tokens": 0, "output_tokens": 0, "llm_seconds": 0.0}
+_CALLS_BY_MODEL: Counter = Counter()
+
+
+def usage_snapshot() -> dict:
+    return {**_USAGE, "by_model": Counter(_CALLS_BY_MODEL)}
+
+
+def usage_since(before: dict) -> dict:
+    """What was used since `before` (from usage_snapshot()): calls, tokens, model-busy seconds,
+    and how many calls went to each model."""
+    out = {k: _USAGE[k] - before[k] for k in _USAGE}
+    out["llm_seconds"] = round(out["llm_seconds"], 2)
+    out["tokens"] = out["input_tokens"] + out["output_tokens"]
+    out["by_model"] = dict(_CALLS_BY_MODEL - before["by_model"])
+    return out
+
+
+def _record_usage(model: str, usage: dict, seconds: float) -> None:
+    _USAGE["calls"] += 1
+    _USAGE["input_tokens"] += usage.get("input_tokens") or 0
+    _USAGE["output_tokens"] += usage.get("output_tokens") or 0
+    _USAGE["llm_seconds"] += seconds
+    _CALLS_BY_MODEL[model] += 1
 
 
 def _make_client(model: str, temperature: float):
@@ -152,6 +182,7 @@ class MultiModelChatGroq:
             usage = getattr(result, "usage_metadata", None) or {}
             span.set_attribute("llm.input_tokens", usage.get("input_tokens", 0))
             span.set_attribute("llm.output_tokens", usage.get("output_tokens", 0))
+        _record_usage(model, usage, time.perf_counter() - start)
         log.info("llm_call", model=model, duration_ms=round((time.perf_counter() - start) * 1000),
                  input_tokens=usage.get("input_tokens"), output_tokens=usage.get("output_tokens"),
                  tool_calls=len(getattr(result, "tool_calls", None) or []))
