@@ -16,7 +16,8 @@ from langgraph.graph import END, START, StateGraph
 from langgraph.graph.message import add_messages
 from langgraph.prebuilt import ToolNode, tools_condition
 
-from ..config import GROQ_API_KEY, MAX_AGENT_STEPS, MAX_EVIDENCE_CHARS
+from ..config import (GROQ_API_KEY, KEEP_FULL_TOOL_RESULTS, MAX_AGENT_STEPS, MAX_EVIDENCE_CHARS,
+                      TRIMMED_TOOL_RESULT_CHARS)
 from ..logging_setup import get_logger
 from .rate_limits import is_connection_error, is_daily_limit, is_rate_limit, suggested_wait
 from ..tools.repo_tools import build_tools
@@ -128,6 +129,26 @@ def force_answer(llm, messages):
                                  "see the evidence it gathered.)")
 
 
+TRIM_NOTE = ("\n[... older result shortened to save tokens ({n} characters in full). "
+             "If you really need it again, use get_file on a narrower line range.]")
+
+
+def trim_history(messages: list, keep_full: int = KEEP_FULL_TOOL_RESULTS,
+                 max_chars: int = TRIMMED_TOOL_RESULT_CHARS) -> list:
+    """What we SEND to the model: the same conversation, but every tool result except the newest
+    `keep_full` is cut to its first `max_chars` characters. Without this, step 8 resends the code
+    from steps 1-7 again, so tokens grow with every step. The state itself is not changed."""
+    tool_idx = [i for i, m in enumerate(messages) if isinstance(m, ToolMessage)]
+    old = set(tool_idx[:-keep_full] if keep_full else tool_idx)
+    out = []
+    for i, m in enumerate(messages):
+        text = m.content if isinstance(m.content, str) else str(m.content)
+        if i in old and len(text) > max_chars:
+            m = m.model_copy(update={"content": text[:max_chars] + TRIM_NOTE.format(n=len(text))})
+        out.append(m)
+    return out
+
+
 class AgentState(TypedDict):
     messages: Annotated[list, add_messages]  # the conversation so far; new messages get appended
 
@@ -142,7 +163,7 @@ def build_graph(repo_name: str, llm=None, system_prompt: str = SYSTEM_PROMPT):
 
     def agent(state: AgentState):
         """The 'Reason' step: the model looks at the conversation and decides: call a tool, or answer."""
-        msgs = [SystemMessage(system_prompt)] + state["messages"]
+        msgs = [SystemMessage(system_prompt)] + trim_history(state["messages"])
         steps_used = sum(isinstance(m, AIMessage) for m in state["messages"])
 
         # Out of steps? Don't crash: ask for the best possible answer, with tools switched off.
