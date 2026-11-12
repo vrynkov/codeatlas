@@ -27,7 +27,7 @@ from app.agents.llm import active_model_name, get_llm
 from app.agents.react_agent import invoke_with_recovery
 from app.indexing.indexer import repo_source_url
 
-from .harness import _FILE_RE, RunResult, check_citations, score_item
+from .harness import _FILE_RE, RunResult, check_citations, cost_summary, measured, score_item
 from .run_eval import LONG_LIMIT_MARKER, QUOTA_MARKER, RESULTS_DIR, questions_for
 
 BASELINE_PROMPT = """You are answering a question about the GitHub repository {url}.
@@ -51,11 +51,12 @@ def run_baseline(repo: str, items: list[dict]) -> list[dict]:
     for i, item in enumerate(items, 1):
         print(f"[baseline {i}/{len(items)}] {item['id']}", file=sys.stderr)
         r = RunResult(id=item["id"], question=item["question"], route="research")
-        try:
-            r.final = invoke_with_recovery(llm, [SystemMessage(system), HumanMessage(item["question"])]).content
-            r.models_used.append(active_model_name())
-        except Exception as e:  # noqa: BLE001
-            r.error = f"{type(e).__name__}: {e}"
+        with measured(r):
+            try:
+                r.final = invoke_with_recovery(llm, [SystemMessage(system), HumanMessage(item["question"])]).content
+                r.models_used.append(active_model_name())
+            except Exception as e:  # noqa: BLE001
+                r.error = f"{type(e).__name__}: {e}"
         r.cited_files = sorted({f.split("/")[-1] for f in _FILE_RE.findall(r.final)})
         rows.append(score_item(item, r, repo))
         if QUOTA_MARKER in r.error or LONG_LIMIT_MARKER in r.error:
@@ -76,7 +77,8 @@ def outside_metrics(rows: list[dict], repo: str) -> dict:
         valid += c["valid_citations"]
     return {"n": len(rows), "file_mention_rate": rate("file_mentioned"), "file_hit_rate": rate("file_hit"),
             "keyword_hit_rate": rate("keyword_hit"), "citations": total,
-            "valid_citation_rate": valid / total if total else None}
+            "valid_citation_rate": valid / total if total else None,
+            "invented_paths": sum(r.get("invented_paths", 0) for r in rows), **cost_summary(rows)}
 
 
 def latest_team_results(repo: str) -> tuple[str, list[dict]] | None:

@@ -4,9 +4,11 @@ Run from backend/ (with the venv active):
     python -m eval.run_eval requests
     python -m eval.run_eval codeatlas                  # a repo the models have never seen (see README)
     python -m eval.run_eval requests --clear-lessons   # test WITHOUT self-improvement, as a baseline
+    python -m eval.run_eval codeatlas --no-lessons     # ignore saved lessons (without deleting them)
 
 Questions come from eval/questions_<repo>.json if that file exists, else eval/questions.json.
 Compare against "the same model with NO search at all" with:  python -m eval.baseline <repo>
+Compare against ONE ReAct agent (no team) with:                python -m eval.single_agent <repo>
 """
 import json
 import sys
@@ -16,7 +18,7 @@ from pathlib import Path
 
 from app.agents.llm import CRITIC_MODEL_CHAIN, MODEL_CHAIN
 
-from .harness import run_one, score_item
+from .harness import cost_summary, run_one, score_item
 
 QUESTIONS = Path(__file__).parent / "questions.json"
 
@@ -106,7 +108,17 @@ def summarize(rows: list[dict]) -> dict:
         "valid_citation_rate": sum(r.get("valid_citations", 0) for r in research) / cites if cites else None,
         "invented_paths": sum(r.get("invented_paths", 0) for r in research),
         "errors": sum(1 for r in rows if r.get("error")),
+        **cost_summary(research),  # cost of the RESEARCH questions only, so it compares with single_agent
     }
+
+
+def disable_lesson_recall() -> None:
+    """The team recalls "lessons" saved by EARLIER runs - often runs of these very same questions, so
+    they can hint at the expected file. A single agent has no such memory, so for a fair comparison
+    we switch recall off (the saved lessons are left untouched)."""
+    from app.memory.lessons import LessonStore
+    LessonStore.recall = lambda self, question: []
+    print("Lesson recall is OFF for this run (saved lessons are kept).", file=sys.stderr)
 
 
 def _pct(x) -> str:
@@ -146,6 +158,10 @@ def print_summary(title: str, s: dict) -> None:
         if "invented_paths" in s:
             print(f"Invented file paths: {s['invented_paths']}  (made-up files the app caught and labelled "
                   f"'not found' - not counted in the line above)")
+    if s.get("avg_tokens") is not None:
+        print(f"Cost per question  : {s['avg_tokens']:.0f} tokens, {s['avg_llm_calls']:.1f} model calls, "
+              f"{s['avg_seconds']:.0f}s ({s['avg_llm_seconds']:.0f}s of that the model was working; "
+              f"the rest is rate-limit waits and tools)")
     if s["errors"]:
         print(f"Errors             : {s['errors']}")
 
@@ -160,10 +176,14 @@ if __name__ == "__main__":
         from app.memory.lessons import LessonStore
         n = LessonStore(repo).clear()
         print(f"Cleared {n} existing lesson(s) for a clean baseline.", file=sys.stderr)
+    no_lessons = "--no-lessons" in sys.argv
+    if no_lessons:
+        disable_lesson_recall()
 
     items = questions_for(repo)
     rows = run(repo, items)
     summary = summarize(rows)
+    summary["lessons_used"] = not no_lessons and "--clear-lessons" not in sys.argv
     print_summary(f"CodeAtlas eval - {repo}", summary)
 
     RESULTS_DIR.mkdir(exist_ok=True)

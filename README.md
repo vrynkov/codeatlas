@@ -140,11 +140,14 @@ An eval that grades itself proves little, so:
 - **Outside checks with no AI involved:** did the answer name the expected file and keyword, and does every `file:line` it cites really exist (the file is there and has those lines)?
 - **A repo the models can't have memorized.** `psf/requests` is in every model's training data, so a good score there partly measures memory. CodeAtlas's own code (written in 2026, after these models were trained) is the second test set: [`eval/questions_codeatlas.json`](backend/eval/questions_codeatlas.json).
 - **A no-search baseline.** [`eval/baseline.py`](backend/eval/baseline.py) asks the same questions to the same model with no search at all, and prints both side by side. The gap between the two is what the agents and search actually add.
+- **A one-agent baseline.** [`eval/single_agent.py`](backend/eval/single_agent.py) asks the same questions to ONE ReAct agent with the same tools and model, but no Supervisor, Explainer, Critic or retry. Every setup also records tokens, model calls and seconds per question, so "is the team worth its extra cost?" has a number. [`eval/compare_setups.py`](backend/eval/compare_setups.py) prints all three side by side, only on questions every setup finished, plus a question-by-question tally. Results will be added here after the first real run.
 
 ```bash
 python -m app.indexing.indexer index https://github.com/vrynkov/codeatlas
-python -m eval.run_eval codeatlas     # the full team
-python -m eval.baseline codeatlas     # the same model, no search
+python -m eval.run_eval codeatlas --no-lessons   # the full team (no hints from earlier runs)
+python -m eval.single_agent codeatlas            # one ReAct agent, no team
+python -m eval.baseline codeatlas                # the same model, no search
+python -m eval.compare_setups codeatlas          # one table for all three
 # optional, needs `indexer index https://github.com/psf/requests` first:
 python -m eval.baseline requests      # a famous repo: shows how much of a score is memory
 ```
@@ -267,7 +270,7 @@ backend/
     memory/       # Self-improvement "lessons" store
     tools/        # Hybrid search, safe file reading
     mcp_server.py # Exposes the same capabilities over MCP
-  eval/           # Question sets, scoring harness, no-search baseline, before/after comparison, charting
+  eval/           # Question sets, scoring harness, no-search and one-agent baselines, comparisons, charting
   tests/          # Offline pytest suite (fake model, no network)
 frontend/
   src/            # React UI: repo picker, chat, live agent trace log
