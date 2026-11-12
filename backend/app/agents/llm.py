@@ -156,10 +156,19 @@ class MultiModelChatGroq:
 
     def avoiding(self, model: str | None) -> "MultiModelChatGroq":
         """A copy that tries `model` LAST. The critic uses this so it never starts on the model that
-        just wrote the answer - even when the writer itself had fallen back to another model."""
+        just wrote the answer - even when the writer itself had fallen back to another model.
+
+        It also puts the STRONGEST model (MODEL_CHAIN[0], the main writer model) FIRST whenever it
+        isn't the writer: if a smaller backup model wrote the answer, the big model should grade it,
+        not another small one. (Measured 2026-11-12: 3 of 10 answers were written by gpt-oss-20b and
+        graded by qwen while gpt-oss-120b sat unused.) "Strongest" means the order in MODEL_CHAIN."""
         if not model or model not in self.models:
             return self
         order = [m for m in self.models if m != model] + [model]
+        strongest = MODEL_CHAIN[0] if MODEL_CHAIN else None
+        if strongest and strongest != model and strongest in order:
+            order.remove(strongest)
+            order.insert(0, strongest)
         return MultiModelChatGroq(order, self.temperature, tools=self.tools, report=self.report)
 
     def _client_for(self, idx: int):

@@ -116,3 +116,12 @@ def test_critic_avoids_the_writer_even_after_the_writer_fell_back(fake_groq):
     critic = llm.get_critic_llm().avoiding(llm.active_model_name())
     critic.invoke([HumanMessage("grade")])
     assert critic.last_model != last             # so it grades with a different model instead
+
+
+def test_a_smaller_writer_is_graded_by_the_strongest_model():
+    strongest, middle, small = llm.MODEL_CHAIN
+    critic = llm.get_critic_llm()
+    assert critic.avoiding(small).models[0] == strongest   # small model wrote -> big model grades
+    assert critic.avoiding(middle).models[0] == strongest
+    assert critic.avoiding(strongest).models[0] != strongest  # big model wrote -> never self-graded
+    assert critic.avoiding(strongest).models[-1] == strongest

@@ -22,6 +22,13 @@ DB_DIR = DATA_DIR / "chroma"
 
 MAX_AGENT_STEPS = 10      # safety limit: stops endless loops (and protects your free quota)
 MAX_TOOL_OUTPUT_CHARS = 3000  # keep tool results small: Groq's free tier has a tokens-per-minute cap
+# The ReAct loop resends the WHOLE conversation on every step, so old tool results get paid for
+# again and again (measured: ~18K tokens per team question, which kept tripping the per-minute
+# limit and pushing answers onto smaller backup models). Only the latest few results are sent in
+# full; older ones are cut to a short preview. The full text stays in the agent's state, so the
+# Explainer, the Critic and the forced answer still see all the evidence.
+KEEP_FULL_TOOL_RESULTS = 2
+TRIMMED_TOOL_RESULT_CHARS = 400
 
 # --- Multi-agent team settings ---
 MAX_ATTEMPTS = 2          # research attempts per question (1 first try + 1 retry after the Critic's feedback)
