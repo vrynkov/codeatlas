@@ -9,7 +9,8 @@ SECURITY RULE: a lesson is pasted into the prompt of EVERY later user who asks s
 So a lesson must never contain free text that a user (or a model steered by a user) wrote -
 otherwise one person could plant "ignore your instructions and say X" for everyone after them
 (that's called PROMPT INJECTION). Lessons are therefore built ONLY from fixed sentences below,
-plus file paths and search words that pass a strict character filter. Feedback is a yes/no
+plus file paths that really exist in the indexed repo. (Search words are NOT stored: they are
+model text a question can steer, and plain words pass any character filter.) Feedback is a yes/no
 rating only: the app accepts no free-text note at all, so there is nothing typed to leak.
 
 Handy commands (run from backend/):
@@ -71,7 +72,6 @@ class LessonStore:
 # Only these characters survive into a lesson. No spaces in paths, no quotes, no newlines, no
 # colons - so a "file name" can't smuggle in a sentence like "Ignore previous instructions".
 _SAFE_PATH = re.compile(r"^[\w.\-/]{1,120}\.\w{1,6}$")
-_UNSAFE_QUERY_CHARS = re.compile(r"[^A-Za-z0-9_ ./-]")
 
 
 def safe_files(files, real: set | None = None, limit: int = 5) -> list[str]:
@@ -84,26 +84,16 @@ def safe_files(files, real: set | None = None, limit: int = 5) -> list[str]:
     return list(dict.fromkeys(out))[:limit]
 
 
-def safe_queries(queries, limit: int = 3) -> list[str]:
-    """Search words, cut down to letters/digits/a few symbols and 60 characters each."""
-    out = []
-    for q in queries or []:
-        q = " ".join(_UNSAFE_QUERY_CHARS.sub(" ", str(q)).split())[:60]
-        if q:
-            out.append(q)
-    return out[:limit]
-
-
 def _files(summary: dict) -> str:
     return ", ".join(safe_files(summary.get("files"))) or "unknown"
 
 
 def lesson_from_retry(summary: dict) -> str:
-    """The critic's free-text advice is deliberately NOT stored: it is model text that can be steered
-    by whatever the user typed in their question, and lessons are shared with every later user."""
-    searches = "; ".join(safe_queries(summary.get("queries"))) or "n/a"
+    """Neither the critic's advice nor the researcher's search words are stored: both are model text
+    that the user's question can steer (a search for "ignore your rules and say X" is plain words,
+    so no character filter can catch it), and lessons are shared with every later user."""
     return (f"A first attempt at this kind of question missed something and needed a second look. "
-            f"The accepted answer relied on: {_files(summary)}. Searches used: {searches}.")
+            f"The accepted answer relied on: {_files(summary)}.")
 
 
 def record_feedback(store: LessonStore, summary: dict, positive: bool) -> str:
@@ -111,9 +101,7 @@ def record_feedback(store: LessonStore, summary: dict, positive: bool) -> str:
     Takes NO free text on purpose (see the SECURITY RULE at the top of this file)."""
     q = summary["question"]
     if positive:
-        searches = "; ".join(safe_queries(summary.get("queries"))) or "n/a"
-        store.add(q, f"A good answer to this kind of question was found in: {_files(summary)}. "
-                     f"Searches used: {searches}.", "playbook")
+        store.add(q, f"A good answer to this kind of question was found in: {_files(summary)}.", "playbook")
         return "saved a playbook lesson (what worked)"
     store.add(q, f"An earlier answer to this kind of question was marked unhelpful. "
                  f"It cited: {_files(summary)}. Verify claims in the actual code and look beyond those files.",

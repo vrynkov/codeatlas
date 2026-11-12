@@ -34,7 +34,6 @@ class TeamState(TypedDict):
     findings: str
     evidence: list      # pieces of code the researcher looked at
     files: list          # files cited, for the lesson we may save later
-    queries: list         # search_code queries the researcher tried, for the lesson
     draft: str
     score: int
     review_failed: bool  # True when the critic gave no usable review: the answer is UNVERIFIED, not passed
@@ -194,7 +193,7 @@ def build_team_graph(repo_name: str, llm, critic_llm=None):
                      f"Investigate it specifically:\n{state['advice']}")
         graph = build_graph(repo_name, llm, RESEARCHER_PROMPT)
         findings, evidence = "", list(state["evidence"])
-        files, queries = set(state["files"]), list(state["queries"])
+        files = set(state["files"])
         try:
             for update in graph.stream({"messages": [HumanMessage(task)]},
                                        {"recursion_limit": MAX_AGENT_STEPS * 2 + 1}, stream_mode="updates"):
@@ -203,9 +202,7 @@ def build_team_graph(repo_name: str, llm, critic_llm=None):
                         if node == "agent" and getattr(msg, "tool_calls", None):
                             for tc in msg.tool_calls:
                                 _emit("researcher", "act", f"{tc['name']}({tc['args']})")
-                                if tc["name"] == "search_code":
-                                    queries.append(str(tc["args"].get("query", "")))
-                                elif tc["name"] == "get_file":
+                                if tc["name"] == "get_file":
                                     files.add(str(tc["args"].get("path", "")))
                         elif node == "tools":
                             evidence.append(msg.content)
@@ -218,7 +215,7 @@ def build_team_graph(repo_name: str, llm, critic_llm=None):
             _emit("researcher", "error", f"{type(e).__name__}: {str(e)[:150]}")
             findings = findings or "(the researcher failed; answer only from the evidence)"
         return {"findings": findings, "evidence": evidence, "attempts": state["attempts"] + 1,
-                "files": sorted(f for f in files if f), "queries": queries, "lessons_used": lessons_used}
+                "files": sorted(f for f in files if f), "lessons_used": lessons_used}
 
     def explainer(state: TeamState):
         _emit("explainer", "write", "writing the answer")
@@ -262,8 +259,9 @@ def build_team_graph(repo_name: str, llm, critic_llm=None):
 
     def finalize(state: TeamState):
         final = state["draft"]
-        summary = {"question": state["question"], "files": state["files"], "queries": state["queries"],
-                   "first_advice": state["first_advice"]}
+        summary = {"question": state["question"], "first_advice": state["first_advice"],
+                   # get_file paths are chosen by the model, so keep only files that really exist
+                   "files": safe_files(state["files"], real=real_files(repo_name))}
         if state["review_failed"]:
             final += ("\n\n> Unverified: the automatic reviewer could not check this answer, "
                       "so treat its claims with extra care.")
@@ -304,7 +302,7 @@ def run_team(repo_name: str, question: str, llm=None, request_id: str | None = N
         critic_llm = critic_llm or get_critic_llm()
     app = build_team_graph(repo_name, llm, critic_llm)
     start = {"question": question, "route": "", "attempts": 0, "findings": "", "evidence": [],
-             "files": [], "queries": [], "draft": "", "score": 0, "review_failed": False,
+             "files": [], "draft": "", "score": 0, "review_failed": False,
              "advice": "", "first_advice": "",
              "final": "", "lessons_used": []}
     config = {"recursion_limit": 30, "run_name": "codeatlas_team", "tags": ["codeatlas", repo_name],
