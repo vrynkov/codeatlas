@@ -252,14 +252,14 @@ Once the eval started recording tokens, model calls and seconds for each questio
 | Model calls / question | 8.2 | 10.9 |
 | Seconds / question (model actually working) | 48 (13) | 68 (19) |
 | Answers written by the main model, `gpt-oss-120b` | 4 of 10 | 3 of 10 |
-| Answers by a smaller model that `gpt-oss-120b` graded | 0 of 3 | 2 of 6 |
+| Answers by a smaller model that `gpt-oss-120b` graded | 2 of 5 | 2 of 6 |
 | Crashed with "request too large" | 1 | 2 |
 
 **What the "before" run showed.** No model ran out for the day. The team sent so many tokens per minute that `gpt-oss-120b` kept hitting its per-minute limit, so the code switched to smaller backup models: 6 of 10 answers came from `gpt-oss-20b` or `qwen`. About 35 of every 48 seconds were spent waiting on rate limits. The extra agents cost more than tokens: they also pushed answers onto weaker models.
 
 **My guesses, and the fixes.**
 1. I assumed the ReAct loop's growing history was the main cost, since it resends old tool results on every step. So only the 2 newest tool results are now sent in full (`trim_history` in [`react_agent.py`](backend/app/agents/react_agent.py)).
-2. When a backup model wrote the answer, a backup model also graded it. So the Critic now *starts* on the strongest model whenever that model isn't the writer (`avoiding()` in [`llm.py`](backend/app/agents/llm.py)).
+2. All 3 answers written by `gpt-oss-20b` were graded by `qwen`, another small model. So the Critic now *starts* on the strongest model whenever that model isn't the writer (`avoiding()` in [`llm.py`](backend/app/agents/llm.py)).
 
 **What "after" showed: both guesses were wrong.**
 1. Input tokens *per call* did not move (2,050 to 1,978). The researcher's history was never the big cost. Each call is ~2K tokens whatever the step, and the Explainer and the Critic each re-read up to 9,000 characters of evidence. The cost comes from *how many calls* the team makes (8 to 11 per question), not from any single call growing.
