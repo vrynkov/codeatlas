@@ -239,30 +239,35 @@ Three of four runs show a net positive lean; one shows a net negative one. Chart
 
 **Honest read:** the mechanism shows a real, if modest, positive lean across repeated testing — but every run shares the same confound (the AFTER pass usually completes fewer questions than BEFORE, since it starts right after BEFORE has already spent part of the day's quota, and the model actually answering sometimes changes mid-comparison as Groq's per-model limits shift). A single same-model, full-sample run under calm conditions is what would actually settle this with confidence. See "Known limitations" below for the specifics behind Run 2's regression.
 
-### Measure, find, fix, measure again (2026-11-12)
+### Measure, find, fix, measure again (2026-11-12 to 11-13)
 
-Once the eval started recording tokens, model calls and seconds for each question, the first clean team run showed a problem the quality scores had hidden. I guessed at the cause, shipped a fix, and measured again. **The fix did not work.** Here is the record, because finding that out is the point of measuring.
+Once the eval started recording tokens, model calls and seconds for each question, the first clean team run showed a problem the quality scores had hidden. I guessed at the cause, shipped two fixes, and measured again on fresh quota. **Neither fix worked.** Here is the record, because finding that out is the point of measuring.
 
-| Team, 10 code questions, saved lessons off | Before ([run](backend/eval/results/codeatlas-20261112-083739.json)) | After the fix ([run](backend/eval/results/codeatlas-20261112-091904.json)) |
+| Team, 10 code questions, saved lessons off, fresh daily quota | Before ([run](backend/eval/results/codeatlas-20261112-083739.json)) | After both fixes ([run](backend/eval/results/codeatlas-20261113-094221.json)) |
 |---|---|---|
-| Cited the expected file | 70% | 70% |
-| Citations that really exist | 100% (43) | 98% (49 of 50) |
-| Input tokens per model call | 2,050 | 2,108 |
-| Tokens / question | 18,254 | 23,021 |
-| Model calls / question | 8.2 | 10.1 |
-| Seconds / question (model actually working) | 48 (13) | 103 (17) |
-| Answers written by the main model, `gpt-oss-120b` | 4 of 10 | 2 of 10 |
-| Crashed with "request too large" | 1 | 1 |
+| Cited the expected file | 70% | 80% |
+| Citations that really exist | 100% (43) | 100% (45) |
+| Input tokens per model call | 2,050 | 1,978 |
+| Tokens / question | 18,254 | 23,912 |
+| Model calls / question | 8.2 | 10.9 |
+| Seconds / question (model actually working) | 48 (13) | 68 (19) |
+| Answers written by the main model, `gpt-oss-120b` | 4 of 10 | 3 of 10 |
+| Answers by a smaller model that `gpt-oss-120b` graded | 2 of 5 | 2 of 6 |
+| Crashed with "request too large" | 1 | 2 |
 
 **What the "before" run showed.** No model ran out for the day. The team sent so many tokens per minute that `gpt-oss-120b` kept hitting its per-minute limit, so the code switched to smaller backup models: 6 of 10 answers came from `gpt-oss-20b` or `qwen`. About 35 of every 48 seconds were spent waiting on rate limits. The extra agents cost more than tokens: they also pushed answers onto weaker models.
 
-**My guess, and the fix.** I assumed the ReAct loop's growing history was the main cost, since it resends old tool results on every step. So only the 2 newest tool results are now sent in full (`trim_history` in [`react_agent.py`](backend/app/agents/react_agent.py)). Separately, when a backup model writes the answer, the Critic now starts on the strongest model rather than another small one (`avoiding()` in [`llm.py`](backend/app/agents/llm.py)).
+**My guesses, and the fixes.**
+1. I assumed the ReAct loop's growing history was the main cost, since it resends old tool results on every step. So only the 2 newest tool results are now sent in full (`trim_history` in [`react_agent.py`](backend/app/agents/react_agent.py)).
+2. All 3 answers written by `gpt-oss-20b` were graded by `qwen`, another small model. So the Critic now *starts* on the strongest model whenever that model isn't the writer (`avoiding()` in [`llm.py`](backend/app/agents/llm.py)).
 
-**What "after" showed: the guess was wrong.** Input tokens *per call* did not move (2,050 to 2,108). The researcher's history was never the big cost. Each call is ~2K tokens whatever the step, and the Explainer and the Critic each re-read up to 9,000 characters of evidence. The cost comes from *how many calls* the team makes (8 to 10 per question), not from any single call growing.
+**What "after" showed: both guesses were wrong.**
+1. Input tokens *per call* did not move (2,050 to 1,978). The researcher's history was never the big cost. Each call is ~2K tokens whatever the step, and the Explainer and the Critic each re-read up to 9,000 characters of evidence. The cost comes from *how many calls* the team makes (8 to 11 per question), not from any single call growing.
+2. The Critic does try `gpt-oss-120b` first now. But a smaller model writes the answer *because* `gpt-oss-120b` just hit its per-minute limit, so the Critic usually finds it still blocked and falls back too. Only 2 of 6 such answers got the big model as their judge. The fix is correct but treats a symptom. The cause is the same burst of calls.
 
-**Why the other "after" numbers aren't a fair test.** The after run started on quota the morning run had already used. Partway through, `gpt-oss-120b` and `gpt-oss-20b` hit their daily limits, the last 4 questions all ran on `qwen`, and 3 answers were graded by the model that wrote them. The same question can also cost 6K tokens in one run and 32K in another, because a retry doubles it. With one run of 10 questions, tokens per question is too noisy to show a 20% change. Tokens *per call* is the more stable measure, and that's why it is the one quoted above.
+The "cited the expected file" change (70% to 80%) is one question, which is within noise: identical runs have moved 20 points before. The same question can cost 6K tokens in one run and 37K in another, because a retry doubles it, so tokens per question is too noisy to compare. Tokens *per call* is the stable measure. (A third run, on 2026-11-12 after the morning run had used most of the quota, hit the daily limit partway through. It is kept [here](backend/eval/results/codeatlas-20261112-091904.json) for completeness, but it isn't used above.)
 
-**What I'd change next.** Make fewer calls, rather than make each call smaller. The one-agent comparison ([`eval/single_agent.py`](backend/eval/single_agent.py)) tests the extreme version: no Explainer and no Critic at all.
+**What I'd change next.** Make fewer calls, rather than make each call smaller. The one-agent comparison ([`eval/single_agent.py`](backend/eval/single_agent.py)) tests the extreme version: no Supervisor, no Explainer and no Critic at all. A milder option is to wait for `gpt-oss-120b` to free up instead of switching models. That gives slower answers from the stronger model, which is a product trade-off.
 
 ## Known limitations (found by actually checking the work, not guessing)
 
