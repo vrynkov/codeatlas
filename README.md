@@ -140,7 +140,7 @@ An eval that grades itself proves little, so:
 - **Outside checks with no AI involved:** did the answer name the expected file and keyword, and does every `file:line` it cites really exist (the file is there and has those lines)?
 - **A repo the models can't have memorized.** `psf/requests` is in every model's training data, so a good score there partly measures memory. CodeAtlas's own code (written in 2026, after these models were trained) is the second test set: [`eval/questions_codeatlas.json`](backend/eval/questions_codeatlas.json).
 - **A no-search baseline.** [`eval/baseline.py`](backend/eval/baseline.py) asks the same questions to the same model with no search at all, and prints both side by side. The gap between the two is what the agents and search actually add.
-- **A one-agent baseline.** [`eval/single_agent.py`](backend/eval/single_agent.py) asks the same questions to ONE ReAct agent with the same tools and model, but no Supervisor, Explainer, Critic or retry. Every setup also records tokens, model calls and seconds per question, so "is the team worth its extra cost?" has a number. [`eval/compare_setups.py`](backend/eval/compare_setups.py) prints all three side by side, only on questions every setup finished, plus a question-by-question tally. Results will be added here after the first real run.
+- **A one-agent baseline.** [`eval/single_agent.py`](backend/eval/single_agent.py) asks the same questions to ONE ReAct agent with the same tools and model, but no Supervisor, Explainer, Critic or retry. Every setup also records tokens, model calls and seconds per question, so "is the team worth its extra cost?" has a number. [`eval/compare_setups.py`](backend/eval/compare_setups.py) prints all three side by side, only on questions every setup finished, plus a question-by-question tally. Results are in [Team vs one agent](#team-vs-one-agent-2026-11-13-to-11-14) below.
 
 ```bash
 python -m app.indexing.indexer index https://github.com/vrynkov/codeatlas
@@ -238,6 +238,25 @@ Three of four runs show a net positive lean; one shows a net negative one. Chart
 ![Before vs after lessons](backend/eval/results/requests-lesson-comparison.png)
 
 **Honest read:** the mechanism shows a real, if modest, positive lean across repeated testing — but every run shares the same confound (the AFTER pass usually completes fewer questions than BEFORE, since it starts right after BEFORE has already spent part of the day's quota, and the model actually answering sometimes changes mid-comparison as Groq's per-model limits shift). A single same-model, full-sample run under calm conditions is what would actually settle this with confidence. See "Known limitations" below for the specifics behind Run 2's regression.
+
+### Team vs one agent (2026-11-13 to 11-14)
+
+Is the four-agent team worth it, or would one agent do the job? Same 10 code questions, same tools, same models, each setup on fresh daily quota ([team](backend/eval/results/codeatlas-20261113-094221.json), [one agent](backend/eval/results/codeatlas-single-20261114-130721.json), [no search](backend/eval/results/codeatlas-baseline-20261114-131151.json)).
+
+| Setup | Cited right file (`file:line`) | Named right file (anywhere) | Real citations | Tokens / question | Model calls / question | Seconds / question (model working) |
+|---|---|---|---|---|---|---|
+| Same model, no search | 0% | 0% | 0% (0 of 2) | 542 | 1.0 | 2 (2) |
+| One ReAct agent | 30% | 70% | 100% (4 of 4) | 9,011 | 4.9 | 30 (7) |
+| Full team | 80% | 80% | 100% (45 of 45) | 23,912 | 10.9 | 68 (19) |
+
+**What it shows:**
+- **Finding the right code is about a tie.** The one agent named the right file in 7 of 10 answers, the team in 8. One question is within noise. The one agent did it with **~2.7x fewer tokens** and in less than half the time.
+- **Citing it precisely is where the team wins.** The one agent usually wrote the right file as a plain path with no line numbers. That isn't a clickable citation, so the strict check counts it as a miss. Across 10 answers it wrote only 4 `file:line` citations; the team wrote 45. The difference is the **Explainer**, whose prompt enforces a "Where to look: `path:START-END`" section.
+- **Where the one agent lost questions:** 2 crashes (a backup model's "request too large" limit) and one misread question. Asked "When is an answer sent back for another research attempt?", it described its own ReAct loop without searching at all.
+- **Both setups ended up on smaller models** (team: 3 of 10 answers by `gpt-oss-120b`, one agent: 4 of 10). I expected the one agent, with fewer calls per minute, to stay on the big model much more often. It didn't.
+- **No search at all** finds nothing: 0 of 10 files named, and both of its citations were made up. The search tools are what make the answers real.
+
+**Verdict.** The extra agents don't help *find* the code. What they buy is precise, clickable citations, at ~2.7x the cost. The Supervisor and the Critic don't show a measurable benefit here. **What I'd change:** one ReAct agent plus a single formatting step like the Explainer (about 6 calls instead of 11), then measure that against both setups above. With 10 questions, only large gaps count. The 50-point gap on citations is large. The 10-point gap on finding the file is not.
 
 ### Measure, find, fix, measure again (2026-11-12 to 11-13)
 
