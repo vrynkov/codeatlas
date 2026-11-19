@@ -89,12 +89,13 @@ def _num(x, fmt="{:,.0f}") -> str:
 
 def table(metrics: dict[str, dict]) -> str:
     labels = {"baseline": "Same model, no search", "single": "One ReAct agent", "team": "Full team"}
-    lines = ["| Setup | Cited right file | Real citations | Tokens / question | Model calls / question "
-             "| Seconds / question (model busy) |",
-             "|---|---|---|---|---|---|"]
+    lines = ["| Setup | Cited right file (file:line) | Named right file (anywhere) | Real citations "
+             "| Tokens / question | Model calls / question | Seconds / question (model busy) |",
+             "|---|---|---|---|---|---|---|"]
     for name, m in metrics.items():
         secs = "n/a" if m["avg_seconds"] is None else f"{m['avg_seconds']:.0f} ({m['avg_llm_seconds']:.0f})"
-        lines.append(f"| {labels[name]} | {_pct(m['file_hit_rate'])} | {_pct(m['valid_citation_rate'])} "
+        lines.append(f"| {labels[name]} | {_pct(m['file_hit_rate'])} | {_pct(m['file_mention_rate'])} "
+                     f"| {_pct(m['valid_citation_rate'])} "
                      f"({m['citations']}) | {_num(m['avg_tokens'])} | {_num(m['avg_llm_calls'], '{:.1f}')} "
                      f"| {secs} |")
     return "\n".join(lines)
