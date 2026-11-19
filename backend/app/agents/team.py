@@ -23,7 +23,7 @@ from langgraph.graph import END, START, StateGraph
 from ..config import GROQ_API_KEY, MAX_AGENT_STEPS, MAX_ATTEMPTS, MAX_EVIDENCE_CHARS, PASS_SCORE
 from ..memory.lessons import LessonStore, lesson_from_retry, record_feedback, safe_files
 from .llm import active_model_name
-from .prompts import CHAT_PROMPT, CRITIC_PROMPT, EXPLAINER_PROMPT, RESEARCHER_PROMPT, SUPERVISOR_PROMPT
+from .prompts import CRITIC_PROMPT, EXPLAINER_PROMPT, RESEARCHER_PROMPT, SUPERVISOR_PROMPT
 from .react_agent import build_graph, invoke_with_recovery
 
 
@@ -102,6 +102,34 @@ _BACKTICK_PATH = re.compile(r"`(?P<path>[\w .\-/]+\.\w{1,4})`")
 NOT_FOUND_LABEL = " (not found in this repo)"
 
 
+OFF_TOPIC_REPLY = ("I'm sorry, this looks like a general question that is not about this repository. "
+                   "I can only help with questions about the code in the repository.")
+
+# Everyday English words. A question word that ALSO appears in the repo only counts as a sign the
+# question is about the repo if it is not one of these (almost every repo has "the", "you", "day"
+# somewhere in its comments).
+_COMMON_WORDS = frozenset("""
+a about after again all also am an and any are as at be been before but by can could day did do does
+doing for from get go good got had has have he hello her hey hi him his how i if in is it its just
+know like me morning my no not now of on one or our out please so some tell than thank thanks that
+the their them then there these they this to today tomorrow too up us very was we weather well were
+what when where which who why will with would yes yesterday you your bye goodbye night evening
+afternoon time weekend game score news joke ok okay
+""".split())
+
+
+def repo_terms_in(question: str, repo_name: str, limit: int = 3) -> list[str]:
+    """Words of the question that also appear in the repo's indexed code ([] if the index can't be
+    read). Example: in an NDEx repo, "what is CX network?" -> ["cx", "network"]."""
+    try:
+        from ..tools.search import _tokenize, get_searcher
+        vocab = get_searcher(repo_name).bm25.idf  # every word in the repo's chunks -> its weight
+    except Exception:  # noqa: BLE001  a failure here must never break the answer itself
+        return []
+    words = dict.fromkeys(w for w in _tokenize(question) if len(w) >= 2 and w not in _COMMON_WORDS)
+    return [w for w in words if w in vocab][:limit]
+
+
 def real_files(repo_name: str) -> set[str]:
     """Every file path in the repo's search index ({} if it can't be read - never raises)."""
     try:
@@ -164,14 +192,23 @@ def build_team_graph(repo_name: str, llm, critic_llm=None):
         _emit("model", "info", active_model_name())  # which model we're STARTING this question with
         data = _ask_json(llm, SUPERVISOR_PROMPT, state["question"]) or {}
         route = data.get("route") if data.get("route") in ("research", "chat") else "research"
-        _emit("supervisor", "route", f"{route}  ({data.get('reason', 'default')})")
+        reason = data.get("reason", "default")
+        if route == "chat":
+            # The model can't see the repo, so it may call a repo-specific term "general" (e.g. "CX" in
+            # an NDEx repo). Before refusing, check the index for free: no model call needed.
+            hits = repo_terms_in(state["question"], repo_name)
+            if hits:
+                route, reason = "research", f"overruled 'chat': the repo mentions {', '.join(hits)}"
+        _emit("supervisor", "route", f"{route}  ({reason})")
         return {"route": route}
 
     def chat(state: TeamState):
-        reply = invoke_with_recovery(llm, [SystemMessage(CHAT_PROMPT), HumanMessage(state["question"])]).content
-        _emit("model", "info", active_model_name())  # which model actually answered, for the eval to record
-        _emit("chat", "answer", reply)
-        return {"final": reply}
+        # A fixed reply, not a model call: it costs nothing and always says the same thing.
+        # Emitted as the TEAM answer, because that is the event the browser and the eval wait for.
+        # (It used to be emitted as agent "chat", so the browser never saw an answer, the server
+        # closed the stream, and the UI showed "Lost connection to the server.")
+        _emit("team", "answer", OFF_TOPIC_REPLY)
+        return {"final": OFF_TOPIC_REPLY}
 
     def researcher(state: TeamState):
         task = state["question"]

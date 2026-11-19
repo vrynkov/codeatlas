@@ -31,6 +31,9 @@ def fake_research(monkeypatch):
     FakeResearchGraph.runs = 0
     monkeypatch.setattr(team, "build_graph", lambda repo, llm, prompt: FakeResearchGraph())
     monkeypatch.setattr(team, "real_files", lambda repo: {"src/retry.py"})
+    # No test may open the real search index (Chroma + embedding model); tests that need the repo's
+    # words patch this again with a FakeSearcher.
+    monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: (_ for _ in ()).throw(RuntimeError("no index")))
 
 
 def run(writer, critic, question="How are retries handled?"):
@@ -104,10 +107,46 @@ def test_review_that_recovers_on_the_second_try_counts(lesson_store):
 
 
 def test_small_talk_goes_to_chat_without_research(lesson_store):
-    writer = FakeLLM({"SUPERVISOR": ['{"route": "chat", "reason": "greeting"}'], "CHAT": ["Hi!"]})
+    writer = FakeLLM({"SUPERVISOR": ['{"route": "chat", "reason": "greeting"}']})
     events = run(writer, FakeLLM({}), question="hello")
     assert FakeResearchGraph.runs == 0
-    assert {"agent": "chat", "type": "answer", "text": "Hi!"} in events
+    # The refusal must be the TEAM answer: that is the only answer event the browser (api.js) and
+    # the eval wait for. Emitting it under another agent name made the UI say "Lost connection".
+    assert final_answer(events) == team.OFF_TOPIC_REPLY
+    assert "only help with questions about the code" in team.OFF_TOPIC_REPLY
+
+
+class FakeSearcher:
+    """Stands in for the repo's search index: bm25.idf holds every word that appears in the repo."""
+    def __init__(self, words):
+        self.bm25 = type("BM25", (), {"idf": dict.fromkeys(words, 1.0)})()
+
+
+def test_chat_route_is_overruled_when_the_question_uses_the_repos_words(lesson_store, monkeypatch):
+    # The real bug report: in the NDEx repo, "CX" is the network file format, but the model said "chat".
+    monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: FakeSearcher(["cx", "network", "load"]))
+    writer = writer_llm()
+    writer.replies["SUPERVISOR"] = ['{"route": "chat", "reason": "Unrelated general question"}']
+    events = run(writer, FakeLLM({"CRITIC": ['{"score": 5}']}), question="what is CX network?")
+    assert FakeResearchGraph.runs == 1
+    route = next(e["text"] for e in events if e["type"] == "route")
+    assert route.startswith("research") and "cx" in route
+    assert final_answer(events) != team.OFF_TOPIC_REPLY
+
+
+def test_chat_route_stands_when_only_everyday_words_match(lesson_store, monkeypatch):
+    # Every repo has "the", "what", "today" somewhere in its comments - those must not count.
+    monkeypatch.setattr("app.tools.search.get_searcher",
+                        lambda repo: FakeSearcher(["what", "the", "today", "good", "morning"]))
+    writer = FakeLLM({"SUPERVISOR": ['{"route": "chat", "reason": "weather"}']})
+    events = run(writer, FakeLLM({}), question="what's the weather today?")
+    assert FakeResearchGraph.runs == 0
+    assert final_answer(events) == team.OFF_TOPIC_REPLY
+
+
+def test_repo_terms_check_never_breaks_a_question_when_the_index_is_missing():
+    # The autouse fixture makes get_searcher raise, like a missing index would.
+    assert team.repo_terms_in("what is CX?", "demo") == []
 
 
 def test_garbled_supervisor_defaults_to_research(lesson_store):

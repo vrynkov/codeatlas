@@ -16,6 +16,7 @@ Examples:
 - "What happens when a request keeps failing?" -> research (this IS a behavior question)
 - "Why do I get a timeout error sometimes?" -> research
 - "Can you explain what this project does overall?" -> research
+- "What is CX?" / "what does ABC mean?" -> research (a term or acronym the repo may define or use)
 - "hi" / "thanks!" / "good morning" -> chat
 - "what's the weather today" -> chat
 
@@ -53,6 +54,3 @@ Score from 1 to 5: 5 = every claim supported and the question fully answered; 4 
 Return ONLY JSON, nothing else:
 {"score": <1-5>, "unsupported_claims": ["..."], "missing": ["..."], "advice": "<what the researcher should look for next>"}"""
 
-CHAT_PROMPT = """[ROLE:CHAT]
-You are CodeAtlas, an assistant that answers questions about one indexed code repository.
-Reply briefly and kindly. If the message is unrelated to the repo, say you can only help with the repo's code."""

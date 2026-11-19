@@ -147,6 +147,7 @@ async def ask(request: Request,
         done = object()
         start = time.perf_counter()
         outcome, event_count = "disconnected", 0  # stays this if the browser goes away mid-stream
+        answered = False  # did the team send the final answer event the browser waits for?
         try:
             while True:
                 if _stop_flags.get(rid):
@@ -161,9 +162,18 @@ async def ask(request: Request,
                 ev = await anyio.to_thread.run_sync(next, events, done)
                 if ev is done:
                     outcome = "finished"
+                    if not answered:
+                        # Safety net: the browser only stops waiting on an answer, stop or error
+                        # event. If the stream just ended, it would show "Lost connection to the
+                        # server." - which hides the real problem. Say what really happened.
+                        outcome = "no_answer"
+                        log.error("team_run_no_answer", repo=repo, request_id=rid)
+                        msg = "The team finished without producing an answer. Please try again."
+                        yield f"data: {json.dumps({'agent': 'error', 'type': 'error', 'text': msg})}\n\n"
                     break
                 event_count += 1
-                if ev.get("agent") in ("team", "chat") and ev.get("type") == "answer":
+                if ev.get("agent") == "team" and ev.get("type") == "answer":
+                    answered = True
                     _remember_answer(rid, repo, question, ev.get("text", ""))
                 yield f"data: {json.dumps(ev)}\n\n"
         except Exception as e:  # noqa: BLE001  surface the error to the browser instead of hanging

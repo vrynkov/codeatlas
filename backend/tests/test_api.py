@@ -39,6 +39,15 @@ def test_ask_streams_the_answer(client):
     assert evs[-1]["type"] == "answer"
 
 
+def test_stream_that_ends_without_an_answer_sends_a_clear_error(client, monkeypatch):
+    # Without this, the browser only sees the connection close and shows "Lost connection to the server."
+    def no_answer(repo, question, request_id=None):
+        yield {"agent": "supervisor", "type": "route", "text": "chat"}
+    monkeypatch.setattr(routes, "run_team", no_answer)
+    evs = events(ask(client))
+    assert evs[-1]["agent"] == "error" and "without producing an answer" in evs[-1]["text"]
+
+
 def test_unknown_repo_is_404(client):
     assert client.get("/api/ask", params={"repo": "nope", "question": "q"}).status_code == 404
 
