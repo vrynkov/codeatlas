@@ -1,5 +1,7 @@
 name: tests
 
+# Runs on every push (any branch) and on every pull request. The `pytest` job below is a required
+# status check in main's branch rule (Settings -> Branches), so a PR can't be merged while it fails.
 on:
   push:
   pull_request:

@@ -120,7 +120,7 @@ cd backend
 pip install -r requirements-dev.txt
 pytest
 ```
-They cover the agent loop (retry, give-up, broken-review handling), model fallback, citation repair, the eval's scoring rules, and every abuse protection below. They also run on every push via GitHub Actions.
+They cover the agent loop (retry, give-up, broken-review handling), model fallback, citation repair, the eval's scoring rules, and every abuse protection below. They run in GitHub Actions on every push and on every pull request, and a branch rule on `main` blocks merging a pull request until the `pytest` check passes.
 
 **Try the MCP server** (see [`scripts/mcp_client_demo.py`](backend/scripts/mcp_client_demo.py)):
 ```bash
