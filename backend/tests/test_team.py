@@ -119,9 +119,54 @@ def test_small_talk_goes_to_chat_without_research(lesson_store):
 
 
 class FakeSearcher:
-    """Stands in for the repo's search index: bm25.idf holds every word that appears in the repo."""
+    """Stands in for the repo's search index: `docs` is the repo's indexed text (one chunk here)."""
     def __init__(self, words):
-        self.bm25 = type("BM25", (), {"idf": dict.fromkeys(words, 1.0)})()
+        self.docs = [" ".join(words)]
+        self.bm25 = type("BM25", (), {"idf": dict.fromkeys(w.lower() for w in words)})()
+
+
+# The repo the user hit the bug with: lots of plain English in its comments, plus code names.
+CODEATLAS_LIKE = ["the", "critic", "decide", "whether", "should", "buy", "network", "answer", "retries",
+                  "handled", "get_file", "search.py", "HTTPAdapter", "bm25", "cx", "API"]
+
+
+@pytest.mark.parametrize("question", [
+    "how does the critic decide whether to retry?",   # the user's log: matched critic, decide, whether
+    "should I decide whether to buy a car?",
+    "what's the weather today?",
+    "WHAT SHOULD I BUY",                               # shouting is not an acronym
+    "hello",
+])
+def test_plain_english_words_never_count_as_repo_terms(monkeypatch, question):
+    monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: FakeSearcher(CODEATLAS_LIKE))
+    assert team.repo_terms_in(question, "demo") == []
+
+
+@pytest.mark.parametrize("question, expected", [
+    ("what is CX network?", ["CX"]),                   # acronym (the PR #20 bug)
+    ("what does get_file return?", ["get_file"]),      # identifier
+    ("what is in search.py?", ["search.py"]),          # file name
+    ("where is HTTPAdapter used?", ["HTTPAdapter"]),   # CamelCase class
+    ("how is bm25 scored?", ["bm25"]),                 # letters + digits
+])
+def test_code_like_words_found_in_the_repo_count(monkeypatch, question, expected):
+    monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: FakeSearcher(CODEATLAS_LIKE))
+    assert team.repo_terms_in(question, "demo") == expected
+
+
+def test_code_like_words_missing_from_the_repo_do_not_count(monkeypatch):
+    monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: FakeSearcher(CODEATLAS_LIKE))
+    assert team.repo_terms_in("what is NASA doing with parse_rocket()?", "demo") == []
+    assert team.repo_terms_in("is get_files a thing?", "demo") == []  # whole word only, not get_file
+
+
+def test_off_topic_question_with_common_repo_words_is_refused(lesson_store, monkeypatch):
+    # Before this fix, "decide" and "whether" (both in the repo's comments) overruled the model's "chat".
+    monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: FakeSearcher(CODEATLAS_LIKE))
+    writer = FakeLLM({"SUPERVISOR": ['{"route": "chat", "reason": "not about code"}']})
+    events = run(writer, FakeLLM({}), question="should I decide whether to buy a car?")
+    assert FakeResearchGraph.runs == 0
+    assert final_answer(events) == team.OFF_TOPIC_REPLY   # still the TEAM answer: no "Lost connection"
 
 
 def test_chat_route_is_overruled_when_the_question_uses_the_repos_words(lesson_store, monkeypatch):
@@ -132,7 +177,7 @@ def test_chat_route_is_overruled_when_the_question_uses_the_repos_words(lesson_s
     events = run(writer, FakeLLM({"CRITIC": ['{"score": 5}']}), question="what is CX network?")
     assert FakeResearchGraph.runs == 1
     route = next(e["text"] for e in events if e["type"] == "route")
-    assert route.startswith("research") and "cx" in route
+    assert route.startswith("research") and "CX" in route
     assert final_answer(events) != team.OFF_TOPIC_REPLY
 
 
