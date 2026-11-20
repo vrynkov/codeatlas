@@ -270,3 +270,10 @@ def test_plain_question_gets_no_lookup(lesson_store, monkeypatch):
     monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: LookupSearcher())
     events = run(writer_llm(), FakeLLM({"CRITIC": ['{"score": 5}']}), question="how are files read?")
     assert not any(e["type"] == "lookup" for e in events)
+
+
+def test_question_with_no_code_words_never_opens_the_index(monkeypatch):
+    # Opening the index the first time is slow on a fresh server ("hello" seemed to hang after a deploy).
+    monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: pytest.fail("index must not be opened"))
+    assert team.repo_terms_in("hello", "demo") == []
+    assert team.repo_terms_in("should I decide whether to buy a car?", "demo") == []

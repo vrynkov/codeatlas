@@ -173,18 +173,20 @@ def repo_terms_in(question: str, repo_name: str, limit: int = 3) -> list[str]:
     Example, NDEx repo: "what is CX network?" -> ["CX"].
     Example, any repo: "should I decide whether to buy a car?" -> [] (no code-like token), so the
     model decides the route instead of a common word deciding it."""
+    tokens = _RAW_TOKEN.findall(question)
+    words = [t for t in tokens if any(c.isalpha() for c in t)]
+    shouting = len(words) >= 2 and all(t.isupper() for t in words)  # the whole question in CAPS
+    candidates = [t for t in dict.fromkeys(tokens) if _looks_like_code(t, shouting)]
+    if not candidates:
+        # "hello" has nothing code-shaped: don't touch the index at all. Opening it the first time
+        # loads Chroma + the embedding model, which can take a long time on a fresh server.
+        return []
     try:
         from ..tools.search import get_searcher
         text = _repo_text(get_searcher(repo_name))
     except Exception:  # noqa: BLE001  a failure here must never break the answer itself
         return []
-    tokens = _RAW_TOKEN.findall(question)
-    words = [t for t in tokens if any(c.isalpha() for c in t)]
-    shouting = len(words) >= 2 and all(t.isupper() for t in words)  # the whole question in CAPS
-    hits = []
-    for t in dict.fromkeys(tokens):
-        if _looks_like_code(t, shouting) and re.search(rf"(?<![\w]){re.escape(t.lower())}(?![\w])", text):
-            hits.append(t)
+    hits = [t for t in candidates if re.search(rf"(?<![\w]){re.escape(t.lower())}(?![\w])", text)]
     return hits[:limit]
 
 
