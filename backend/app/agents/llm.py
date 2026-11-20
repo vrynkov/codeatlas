@@ -142,6 +142,13 @@ class MultiModelChatGroq:
                               # testing), so it's only worth paying for waits long enough to matter.
     MAX_QUICK_RETRIES = 3     # caps same-model short waits so a persistent run of them still
                               # eventually falls through to rerouting instead of waiting forever.
+    MAX_WAIT_TO_GO_BACK = 60  # seconds. If we skipped a model because of a short wait, and every
+                              # model after it then REFUSED the request (e.g. "request too large"
+                              # for a small model's output limit), go back and wait for the
+                              # skipped model - at most this long, and only once per call.
+                              # Bug found 2026-11-20: gpt-oss-20b said "wait 21s", qwen refused
+                              # the Explainer's request as too large, and the question crashed
+                              # even though a 21-second wait would have answered it.
 
     def __init__(self, models: list[str] | None = None, temperature: float = 0, tools=None,
                  report: bool = True):
@@ -207,7 +214,10 @@ class MultiModelChatGroq:
     def invoke(self, messages, **kwargs):
         last_err = None
         idx = 0
+        skipped = None     # (idx, wait in seconds) of the first model we left because of a short wait
+        went_back = False  # we go back to a skipped model at most once per call
         while idx < len(self.models):
+            jump_to = None
             if self.models[idx] in _STATE["dead"]:
                 idx += 1
                 continue
@@ -249,11 +259,24 @@ class MultiModelChatGroq:
                         log.warning("model_fallback", model=self.models[idx], next_model=next_name,
                                     reason="daily_limit")
                     elif next_idx is not None:
+                        if skipped is None and wait is not None:  # a real "try again in Xs", not "too large"
+                            skipped = (idx, wait)
                         # Short-lived limit worth rerouting for (longer than MIN_WAIT_TO_REROUTE),
                         # not a daily one - try another model's separate bucket for just this
                         # call, WITHOUT persisting: next time should still try this model first.
                         log.warning("model_fallback", model=self.models[idx], next_model=self.models[next_idx],
                                     reason="short_term_limit", wait_s=round(wait) if wait else None)
+                    elif wait is None and skipped and not went_back and skipped[1] <= self.MAX_WAIT_TO_GO_BACK:
+                        # This model can't take the request at all, but an earlier model only
+                        # asked us to wait a little. Waiting for it beats crashing the question.
+                        back_idx, back_wait = skipped
+                        went_back = True
+                        log.warning("request_too_large", model=self.models[idx],
+                                    action="wait_for_skipped_model", next_model=self.models[back_idx],
+                                    wait_s=round(back_wait))
+                        time.sleep(back_wait)
+                        last_err, jump_to = e, back_idx
+                        break
                     elif wait is None:
                         log.error("request_too_large", model=self.models[idx])
                         # No parseable "try again in Xs" - this ISN'T a normal throttle that
@@ -275,7 +298,10 @@ class MultiModelChatGroq:
                     last_err = e
                     break  # leave the inner while, the outer while advances to next_idx below
 
-            idx = next_idx if next_idx is not None else len(self.models)
+            if jump_to is not None:
+                idx = jump_to
+            else:
+                idx = next_idx if next_idx is not None else len(self.models)
 
         # We get here in two very different situations, and the error must say which one:
         if not self.models:
