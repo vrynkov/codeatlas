@@ -1,4 +1,4 @@
-"""The agent loop (supervisor -> researcher -> explainer -> critic -> maybe retry), with a fake model.
+"""The TEAM agent loop (supervisor -> researcher -> explainer -> critic -> maybe retry), with a fake model.
 These check the CONTROL logic in plain code: when we retry, when we stop, what counts as a pass."""
 import json
 
@@ -36,8 +36,10 @@ def fake_research(monkeypatch):
     monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: (_ for _ in ()).throw(RuntimeError("no index")))
 
 
-def run(writer, critic, question="How are retries handled?"):
-    return list(team.run_team("demo", question, llm=writer, critic_llm=critic))
+def run(writer, critic, question="How are retries handled?", mode="team"):
+    # These tests check the full team's control logic, so they ask for MODE=team explicitly
+    # (the app's default is single - see test_single_mode.py).
+    return list(team.run_team("demo", question, llm=writer, critic_llm=critic, mode=mode))
 
 
 def writer_llm():

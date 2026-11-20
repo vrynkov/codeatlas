@@ -1,14 +1,24 @@
-"""The multi-agent team, orchestrated with LangGraph.
+"""The question-answering pipeline, orchestrated with LangGraph. It has two modes (config.MODE):
 
+MODE=team (the full 4-agent team):
     START -> supervisor --research--> researcher -> explainer -> critic --pass--> finalize -> END
                   |                       ^                        |
                   +--chat--> chat -> END  +------ retry (with the critic's advice) ------+
+
+MODE=single (the default: same Researcher and Explainer, no Critic, no retry):
+    START -> supervisor --research--> researcher -> explainer -> finalize -> END
+                  |
+                  +--chat--> chat -> END
+    In single mode the supervisor first does the free check "does the question use the repo's own
+    words?". If yes, it routes to research WITHOUT a model call (the team would overrule a "chat"
+    answer in that case anyway, see PR #20). Only if no repo word matches does it ask the model.
 
 Design rule: the LLM decides WHAT to do (route, review). Plain code decides the loop control
 (max attempts, pass score). That keeps free models from looping forever.
 
 Run from the backend/ folder:
-    python -m app.agents.team requests "How are retries handled?"
+    python -m app.agents.team requests "How are retries handled?"          (uses MODE, default single)
+    python -m app.agents.team requests "How are retries handled?" team     (force the full team)
 """
 import json
 import re
@@ -20,7 +30,8 @@ from langgraph.config import get_stream_writer
 from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 
-from ..config import GROQ_API_KEY, MAX_AGENT_STEPS, MAX_ATTEMPTS, MAX_EVIDENCE_CHARS, PASS_SCORE
+from ..config import (GROQ_API_KEY, MAX_AGENT_STEPS, MAX_ATTEMPTS, MAX_EVIDENCE_CHARS, MODE, MODES,
+                      PASS_SCORE)
 from ..memory.lessons import LessonStore, lesson_from_retry, record_feedback, safe_files
 from .llm import active_model_name
 from .prompts import CRITIC_PROMPT, EXPLAINER_PROMPT, RESEARCHER_PROMPT, SUPERVISOR_PROMPT
@@ -29,6 +40,7 @@ from .react_agent import build_graph, invoke_with_recovery
 
 class TeamState(TypedDict):
     question: str
+    mode: str            # "single" or "team" (see config.MODE)
     route: str
     attempts: int
     findings: str
@@ -186,10 +198,21 @@ def _fix_citation_paths(text: str, repo_name: str) -> str:
 
 
 # ---------- the graph ----------
-def build_team_graph(repo_name: str, llm, critic_llm=None):
+def build_team_graph(repo_name: str, llm, critic_llm=None, mode: str = "team"):
+    if mode not in MODES:
+        raise ValueError(f"mode must be one of {MODES}, got {mode!r}")
     critic_llm = critic_llm or llm  # tests may pass one fake model for both
+
     def supervisor(state: TeamState):
+        _emit("mode", "info", mode)  # shown in the UI's log and recorded by the eval
         _emit("model", "info", active_model_name())  # which model we're STARTING this question with
+        if mode == "single":
+            # Free check first (no model call). If the question uses the repo's own words, it is
+            # research no matter what the model would say, so asking the model would be wasted quota.
+            hits = repo_terms_in(state["question"], repo_name)
+            if hits:
+                _emit("supervisor", "route", f"research  (the repo mentions {', '.join(hits)}; no model call needed)")
+                return {"route": "research"}
         data = _ask_json(llm, SUPERVISOR_PROMPT, state["question"]) or {}
         route = data.get("route") if data.get("route") in ("research", "chat") else "research"
         reason = data.get("reason", "default")
@@ -296,6 +319,11 @@ def build_team_graph(repo_name: str, llm, critic_llm=None):
 
     def finalize(state: TeamState):
         final = state["draft"]
+        if mode == "single":  # no Critic ran, so there is no score, no warning and no lesson to save
+            final = _fix_citation_paths(final, repo_name)
+            _emit("model", "info", active_model_name())
+            _emit("team", "answer", final)  # the event the browser, the MCP server and the eval wait for
+            return {"final": final}
         summary = {"question": state["question"], "first_advice": state["first_advice"],
                    # get_file paths are chosen by the model, so keep only files that really exist
                    "files": safe_files(state["files"], real=real_files(repo_name))}
@@ -316,34 +344,46 @@ def build_team_graph(repo_name: str, llm, critic_llm=None):
         return {"final": final}
 
     g = StateGraph(TeamState)
-    for name, fn in [("supervisor", supervisor), ("chat", chat), ("researcher", researcher),
-                     ("explainer", explainer), ("critic", critic), ("finalize", finalize)]:
+    nodes = [("supervisor", supervisor), ("chat", chat), ("researcher", researcher),
+             ("explainer", explainer), ("finalize", finalize)]
+    if mode == "team":
+        nodes.append(("critic", critic))
+    for name, fn in nodes:
         g.add_node(name, fn)
     g.add_edge(START, "supervisor")
     g.add_conditional_edges("supervisor", lambda s: s["route"], {"research": "researcher", "chat": "chat"})
     g.add_edge("chat", END)
     g.add_edge("researcher", "explainer")
-    g.add_edge("explainer", "critic")
-    g.add_conditional_edges("critic", after_critic, {"finalize": "finalize", "researcher": "researcher"})
+    if mode == "team":
+        g.add_edge("explainer", "critic")
+        g.add_conditional_edges("critic", after_critic, {"finalize": "finalize", "researcher": "researcher"})
+    else:
+        g.add_edge("explainer", "finalize")  # single mode: no review, no retry
     g.add_edge("finalize", END)
     return g.compile()
 
 
-def run_team(repo_name: str, question: str, llm=None, request_id: str | None = None, critic_llm=None):
-    """Runs the whole team and yields progress events (dicts with agent / type / text).
+def run_team(repo_name: str, question: str, llm=None, request_id: str | None = None, critic_llm=None,
+             mode: str | None = None):
+    """Answers one question and yields progress events (dicts with agent / type / text).
+    `mode` is "single" or "team"; None means use config.MODE (the MODE env var, default "single").
+    Both modes send the same events, ending with {"agent": "team", "type": "answer"}, so the web UI,
+    the MCP server and the eval work with either one.
     The name, tags and metadata below only matter when LangSmith tracing is on: they make each
     question findable there by repo or by the same request_id that appears in the logs."""
+    mode = mode or MODE
     if llm is None:
         from .llm import get_critic_llm, get_llm
         llm = get_llm()
-        critic_llm = critic_llm or get_critic_llm()
-    app = build_team_graph(repo_name, llm, critic_llm)
-    start = {"question": question, "route": "", "attempts": 0, "findings": "", "evidence": [],
+        if mode == "team":  # single mode never calls the critic, so don't build its model
+            critic_llm = critic_llm or get_critic_llm()
+    app = build_team_graph(repo_name, llm, critic_llm, mode=mode)
+    start = {"question": question, "mode": mode, "route": "", "attempts": 0, "findings": "", "evidence": [],
              "files": [], "draft": "", "score": 0, "review_failed": False,
              "advice": "", "first_advice": "",
              "final": "", "lessons_used": []}
-    config = {"recursion_limit": 30, "run_name": "codeatlas_team", "tags": ["codeatlas", repo_name],
-              "metadata": {"repo": repo_name, "request_id": request_id}}
+    config = {"recursion_limit": 30, "run_name": f"codeatlas_{mode}", "tags": ["codeatlas", repo_name, mode],
+              "metadata": {"repo": repo_name, "request_id": request_id, "mode": mode}}
     yield from app.stream(start, config, stream_mode="custom")
 
 
@@ -362,7 +402,8 @@ if __name__ == "__main__":
         sys.exit(__doc__)
     if not GROQ_API_KEY:
         sys.exit("GROQ_API_KEY is missing. Put it in backend/.env")
-    for ev in run_team(sys.argv[1], sys.argv[2]):
+    # Optional 3rd argument picks the mode for this run: python -m app.agents.team requests "..." team
+    for ev in run_team(sys.argv[1], sys.argv[2], mode=sys.argv[3] if len(sys.argv) > 3 else None):
         if ev["type"] == "answer":
             print(f"\n=== ANSWER ===\n{ev['text']}")
         else:

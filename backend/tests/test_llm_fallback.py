@@ -125,3 +125,47 @@ def test_a_smaller_writer_is_graded_by_the_strongest_model():
     assert critic.avoiding(middle).models[0] == strongest
     assert critic.avoiding(strongest).models[0] != strongest  # big model wrote -> never self-graded
     assert critic.avoiding(strongest).models[-1] == strongest
+
+
+TOO_LARGE = ("Error code: 429 - Request too large for model `qwen` on output tokens per minute (OTPM): "
+             "Limit 1000, Requested 2048. rate_limit_exceeded")
+SHORT_21S = "Error code: 429 - rate_limit_exceeded: tokens per minute (TPM). Please try again in 21s"
+
+
+def test_too_large_on_the_last_model_waits_for_the_skipped_one(fake_groq, monkeypatch):
+    """The 2026-11-20 crash: the first model was used up for the day, the second said "wait 21s",
+    the third refused the Explainer's request as too large. It must wait for the second, not crash."""
+    failures, log = fake_groq
+    a, b, c = llm.MODEL_CHAIN
+    llm._STATE["dead"].add(a)
+    failures[b], failures[c] = SHORT_21S, TOO_LARGE
+    waits = []
+
+    def fake_sleep(seconds):
+        waits.append(seconds)
+        failures.pop(b, None)  # after the wait, b's per-minute bucket has room again
+    monkeypatch.setattr(llm.time, "sleep", fake_sleep)
+
+    out = llm.get_llm().invoke([HumanMessage("explain")])
+    assert out.content == f"answer from {b}"
+    assert log == [b, c, b] and waits == [21]
+
+
+def test_goes_back_only_once_then_gives_the_clear_error(fake_groq):
+    failures, log = fake_groq
+    a, b, c = llm.MODEL_CHAIN
+    llm._STATE["dead"].add(a)
+    failures[b], failures[c] = SHORT_21S, TOO_LARGE  # b never recovers in this test
+    with pytest.raises(RuntimeError, match="couldn't handle this specific request"):
+        llm.get_llm().invoke([HumanMessage("explain")])
+    assert log == [b, c, b, c]  # one trip back, no endless loop
+
+
+def test_a_too_large_model_is_not_waited_for(fake_groq):
+    """"Too large" never clears by waiting, so a model that said it is never the one we go back to."""
+    failures, log = fake_groq
+    a, b, c = llm.MODEL_CHAIN
+    failures[a], failures[b], failures[c] = TOO_LARGE, TOO_LARGE, TOO_LARGE
+    with pytest.raises(RuntimeError, match="couldn't handle this specific request"):
+        llm.get_llm().invoke([HumanMessage("explain")])
+    assert log == [a, b, c]

@@ -1,8 +1,10 @@
-"""Prints ONE table comparing three setups on the same questions, ready to paste into the README:
+"""Prints ONE table comparing the setups on the same questions, ready to paste into the README:
 
     Same model, no search  (eval/baseline.py)
     One ReAct agent        (eval/single_agent.py)
     Full team              (eval/run_eval.py)
+    Single mode            (eval/run_eval.py --mode single) - optional: shown only if a result file exists.
+                           This is what the app runs by default: the agent + one Explainer call.
 
 No model calls, no quota: it only reads the latest saved result files (or the ones you name).
 
@@ -36,7 +38,10 @@ def find_files(repo: str, argv: list[str]) -> dict[str, Path | None]:
     files = {"baseline": _latest(f"{repo}-baseline-2*.json"),
              "single": _latest(f"{repo}-single-2*.json"),
              "team": _latest(f"{repo}-2*.json", exclude=("rescored",))}
-    for name in files:  # --team / --single / --baseline FILE overrides the "latest" choice
+    mode_single = _latest(f"{repo}-mode-single-2*.json")
+    if mode_single or "--mode_single" in argv:  # optional 4th row (older checkouts never made this file)
+        files["mode_single"] = mode_single
+    for name in files:  # --team / --single / --baseline / --mode_single FILE overrides the "latest" choice
         flag = f"--{name}"
         if flag in argv and argv.index(flag) + 1 < len(argv):
             files[name] = Path(argv[argv.index(flag) + 1])
@@ -88,15 +93,18 @@ def _num(x, fmt="{:,.0f}") -> str:
 
 
 def table(metrics: dict[str, dict]) -> str:
-    labels = {"baseline": "Same model, no search", "single": "One ReAct agent", "team": "Full team"}
+    labels = {"baseline": "Same model, no search", "single": "One ReAct agent", "team": "Full team",
+              "mode_single": "Single mode (agent + Explainer)"}
     lines = ["| Setup | Cited right file (file:line) | Named right file (anywhere) | Real citations "
-             "| Tokens / question | Model calls / question | Seconds / question (model busy) |",
-             "|---|---|---|---|---|---|---|"]
+             "| Cited lines hold the named code | Tokens / question | Model calls / question "
+             "| Seconds / question (model busy) |",
+             "|---|---|---|---|---|---|---|---|"]
     for name, m in metrics.items():
         secs = "n/a" if m["avg_seconds"] is None else f"{m['avg_seconds']:.0f} ({m['avg_llm_seconds']:.0f})"
         lines.append(f"| {labels[name]} | {_pct(m['file_hit_rate'])} | {_pct(m['file_mention_rate'])} "
                      f"| {_pct(m['valid_citation_rate'])} "
-                     f"({m['citations']}) | {_num(m['avg_tokens'])} | {_num(m['avg_llm_calls'], '{:.1f}')} "
+                     f"({m['citations']}) | {_pct(m.get('symbol_match_rate'))} ({m.get('symbol_checked', 0)}) "
+                     f"| {_num(m['avg_tokens'])} | {_num(m['avg_llm_calls'], '{:.1f}')} "
                      f"| {secs} |")
     return "\n".join(lines)
 
@@ -110,12 +118,12 @@ def main(repo: str, argv: list[str]) -> None:
     loaded = {n: load(p) for n, p in files.items()}
     ids = common_ids({n: rows for n, (_, rows) in loaded.items()})
     if not ids:
-        sys.exit("No question was finished by all three setups - nothing fair to compare.")
+        sys.exit("No question was finished by every setup - nothing fair to compare.")
     rows = {n: [r for r in loaded[n][1] if r["id"] in ids] for n in files}
     metrics = {n: setup_metrics(rows[n], repo) for n in files}
 
     print(f"Files: " + ", ".join(f"{n}={p.name}" for n, p in files.items()))
-    print(f"Compared on the {len(ids)} research question(s) all three setups finished.\n")
+    print(f"Compared on the {len(ids)} research question(s) all {len(files)} setups finished.\n")
     print(table(metrics))
 
     p = paired(rows["team"], rows["single"])

@@ -8,7 +8,7 @@ ITEM = {"id": "q1", "question": "How?", "expected_route": "research",
 
 
 def fake_run(events):
-    return lambda repo, question, llm=None: iter(events)
+    return lambda repo, question, llm=None, **kw: iter(events)
 
 
 def test_broken_review_counts_as_fail(monkeypatch):
@@ -75,3 +75,17 @@ def test_citation_check_catches_invented_files_and_lines(tmp_path):
                         "demo", repo_dir=tmp_path)
     assert c["citations"] == 4 and c["valid_citations"] == 2
     assert c["invalid_citations"] == ["src/a.py:2-99", "b.py:1"]
+
+
+def test_symbol_check_catches_right_file_but_wrong_lines(tmp_path):
+    """`a.py:1-2` exists, so the old check passes it. But if the answer says `retry` lives there and
+    retry is really on line 9, the stricter check must flag it."""
+    (tmp_path / "a.py").write_text("x = 1\ny = 2\n\n\n\n\n\n\ndef retry():\n    pass\n")
+    answer = ("`retry` is defined at `a.py:9-10`.\n"
+              "Also `retry` is at `a.py:1-2`.\n"                       # wrong lines, real file
+              "`y` (`a.py:2`) and `retry` (`a.py:9`) are separate.\n"  # each name checked against its own citation
+              "See `a.py:1` for setup.")                              # no symbol: not checkable
+    c = check_citations(answer, "demo", repo_dir=tmp_path)
+    assert c["valid_citations"] == 5                                   # every one EXISTS...
+    assert c["symbol_checked"] == 4 and c["symbol_matched"] == 3       # ...but one points at the wrong lines
+    assert c["symbol_mismatches"] == ["a.py:1-2 (named retry)"]

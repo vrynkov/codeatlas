@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from ..agents.team import cited_files, run_team, submit_feedback
 from ..config import (ADD_REPO_PER_DAY, ADD_REPO_PER_HOUR, ASK_PER_DAY, ASK_PER_MINUTE,
-                      FEEDBACK_PER_MINUTE, MAX_QUESTION_CHARS)
+                      FEEDBACK_PER_MINUTE, MAX_QUESTION_CHARS, MODE)
 from ..indexing.indexer import CloneError, IndexBusyError, get_progress, start_indexing_job
 from ..logging_setup import get_logger
 from ..mcp_server import _indexed_repos  # the same "which repos exist" logic, reused here
@@ -124,8 +124,8 @@ async def ask(request: Request,
     cancel this specific stream."""
     if repo not in _indexed_repos():
         raise HTTPException(404, f"Unknown repo '{repo}'.")
-    # Every question costs ~25K tokens of the shared free Groq quota, so one visitor must not be
-    # able to burn the whole day's quota for everyone else.
+    # Every question costs thousands of tokens of the shared free Groq quota (~3x more with
+    # MODE=team), so one visitor must not be able to burn the whole day's quota for everyone else.
     try:
         enforce(request, "ask", [(ASK_PER_MINUTE, 60), (ASK_PER_DAY, 86400)])
     except HTTPException as e:
@@ -140,7 +140,7 @@ async def ask(request: Request,
     _stop_flags[rid] = False
     # Only the length is logged, not the question itself: the app is public, and the full text is
     # in the LangSmith trace anyway (found by the same request_id).
-    log.info("team_run_started", repo=repo, request_id=rid, question_len=len(question))
+    log.info("team_run_started", repo=repo, request_id=rid, question_len=len(question), mode=MODE)
 
     async def event_stream():
         events = run_team(repo, question, request_id=rid)
