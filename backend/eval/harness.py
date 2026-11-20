@@ -120,30 +120,75 @@ def _run_team_into(r: RunResult, repo: str, item: dict, llm, mode: str | None = 
 _CITE_RE = re.compile(r"([\w.\-/]+\.\w{1,4}):(\d+)(?:[-‑–—](\d+))?")
 
 
+# A name in backticks that looks like code: `_fix_citation_paths`, `MultiModelChatGroq.invoke`, `PASS_SCORE`.
+# Paths (with / or a file extension) and anything with spaces are left out: those aren't symbols.
+_SYMBOL_RE = re.compile(r"`([A-Za-z_][\w.]*(?:\(\))?)`")
+SYMBOL_SLACK = 2  # lines of tolerance around a cited range (a range that stops 1 line short is still "right")
+
+
+def _symbols_near(line: str) -> list[str]:
+    """Code names in backticks on one line of the answer, e.g. "`run_team` is in `team.py:10-20`" -> ["run_team"]."""
+    out = []
+    for name in _SYMBOL_RE.findall(line):
+        name = name.removesuffix("()")
+        if "/" in name or re.search(r"\.(py|js|jsx|ts|md|json|txt|toml|yml|yaml)$", name):
+            continue
+        out.append(name.split(".")[-1])  # `LessonStore.recall` -> look for "recall"
+    return out
+
+
 def check_citations(answer: str, repo: str, repo_dir: Path | None = None) -> dict:
     """An outside, no-AI check: for every `path:LINE` or `path:START-END` citation in the answer,
     does that file exist in the repo, and does it really have those lines? A model answering from
-    memory (no search) tends to invent plausible paths and line numbers - this catches that."""
+    memory (no search) tends to invent plausible paths and line numbers - this catches that.
+
+    That alone does NOT prove the lines are the RIGHT ones: `team.py:80-82` passes as long as
+    team.py has 82 lines. So there is a second, stricter check: when the same line of the answer
+    names a symbol in backticks (e.g. "`_CRITIC_RETRY_NUDGE` is at `team.py:80-82`"), that symbol
+    must really appear inside the cited lines (+-SYMBOL_SLACK). Citations with no symbol next to
+    them can't be checked this way and are not counted in symbol_checked."""
     root = repo_dir or (REPOS_DIR / repo)
+    empty = {"citations": 0, "valid_citations": 0, "invalid_citations": [],
+             "symbol_checked": 0, "symbol_matched": 0, "symbol_mismatches": []}
     if not root.exists():
-        return {"citations": 0, "valid_citations": 0, "invalid_citations": []}
+        return empty
     files = [p.relative_to(root).as_posix() for p in root.rglob("*") if p.is_file() and ".git" not in p.parts]
     total, valid, bad = 0, 0, []
-    for path, start, end in _CITE_RE.findall(answer):
-        total += 1
-        matches = [f for f in files if f == path or f.endswith("/" + path)]
-        ok = False
-        if len(matches) == 1:
-            try:
-                n_lines = len((root / matches[0]).read_text(encoding="utf-8", errors="replace").splitlines())
+    checked, matched, mismatches = 0, 0, []
+    for answer_line in answer.splitlines():
+        cites = list(_CITE_RE.finditer(answer_line))
+        for i, m in enumerate(cites):
+            path, start, end = m.groups()
+            # Only the names right around THIS citation: from the end of the previous citation to the
+            # start of the next one. "`a` (`x.py:1`) and `b` (`y.py:9`)" checks a against x.py, b against y.py.
+            lo = cites[i - 1].end() if i else 0
+            hi = cites[i + 1].start() if i + 1 < len(cites) else len(answer_line)
+            symbols = _symbols_near(answer_line[lo:m.start()] + " " + answer_line[m.end():hi])
+            total += 1
+            label = f"{path}:{start}" + (f"-{end}" if end else "")
+            matches = [f for f in files if f == path or f.endswith("/" + path)]
+            ok, lines = False, []
+            if len(matches) == 1:
+                try:
+                    lines = (root / matches[0]).read_text(encoding="utf-8", errors="replace").splitlines()
+                    s, e = int(start), int(end or start)
+                    ok = 1 <= s <= e <= len(lines)
+                except OSError:
+                    ok = False
+            valid += ok
+            if not ok:
+                bad.append(label)
+                continue
+            if symbols:
+                checked += 1
                 s, e = int(start), int(end or start)
-                ok = 1 <= s <= e <= n_lines
-            except OSError:
-                ok = False
-        valid += ok
-        if not ok:
-            bad.append(f"{path}:{start}" + (f"-{end}" if end else ""))
-    return {"citations": total, "valid_citations": valid, "invalid_citations": bad}
+                window = "\n".join(lines[max(s - 1 - SYMBOL_SLACK, 0): e + SYMBOL_SLACK])
+                if any(re.search(rf"\b{re.escape(sym)}\b", window) for sym in symbols):
+                    matched += 1
+                else:
+                    mismatches.append(f"{label} (named {', '.join(symbols)})")
+    return {"citations": total, "valid_citations": valid, "invalid_citations": bad,
+            "symbol_checked": checked, "symbol_matched": matched, "symbol_mismatches": mismatches}
 
 
 def score_item(item: dict, r: RunResult, repo: str | None = None) -> dict:

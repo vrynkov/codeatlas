@@ -130,6 +130,10 @@ def summarize(rows: list[dict]) -> dict:
         "keyword_hit_rate": _rate(research, "keyword_hit"),
         "citations": cites,
         "valid_citation_rate": sum(r.get("valid_citations", 0) for r in research) / cites if cites else None,
+        "symbol_checked": sum(r.get("symbol_checked", 0) for r in research),
+        "symbol_match_rate": (sum(r.get("symbol_matched", 0) for r in research)
+                              / sum(r.get("symbol_checked", 0) for r in research))
+                             if sum(r.get("symbol_checked", 0) for r in research) else None,
         "invented_paths": sum(r.get("invented_paths", 0) for r in research),
         "errors": sum(1 for r in rows if r.get("error")),
         **cost_summary(research),  # cost of the RESEARCH questions only, so it compares with single_agent
@@ -180,8 +184,11 @@ def print_summary(title: str, s: dict) -> None:
         print(f"Mentioned expected file: {_pct(s['file_mention_rate'])}  (named the file anywhere, any format)")
         print(f"Mentioned keyword  : {_pct(s['keyword_hit_rate'])}")
         if s.get("citations"):
-            print(f"Citations that exist: {_pct(s['valid_citation_rate'])}  ({s['citations']} file:line citations "
-                  f"checked against the real files - no AI involved)")
+            print(f"Citations that exist: {_pct(s['valid_citation_rate'])}  ({s['citations']} file:line citations; "
+                  f"the file exists and has those line numbers - no AI involved)")
+        if s.get("symbol_checked"):
+            print(f"Cited lines hold the named code: {_pct(s['symbol_match_rate'])}  ({s['symbol_checked']} citations "
+                  f"with a `symbol` next to them; stricter than the line above)")
         if "invented_paths" in s:
             print(f"Invented file paths: {s['invented_paths']}  (made-up files the app caught and labelled "
                   f"'not found' - not counted in the line above)")

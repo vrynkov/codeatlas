@@ -70,14 +70,17 @@ def outside_metrics(rows: list[dict], repo: str) -> dict:
     def rate(key):
         vals = [bool(r.get(key)) for r in rows if r.get(key) is not None]
         return sum(vals) / len(vals) if vals else None
-    total = valid = 0
+    total = valid = checked = matched = 0
     for r in rows:
         c = check_citations(r.get("answer", ""), repo)  # recomputed, so older team results work too
         total += c["citations"]
         valid += c["valid_citations"]
+        checked += c["symbol_checked"]
+        matched += c["symbol_matched"]
     return {"n": len(rows), "file_mention_rate": rate("file_mentioned"), "file_hit_rate": rate("file_hit"),
             "keyword_hit_rate": rate("keyword_hit"), "citations": total,
             "valid_citation_rate": valid / total if total else None,
+            "symbol_checked": checked, "symbol_match_rate": matched / checked if checked else None,
             "invented_paths": sum(r.get("invented_paths", 0) for r in rows), **cost_summary(rows)}
 
 
