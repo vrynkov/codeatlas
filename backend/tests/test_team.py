@@ -234,3 +234,38 @@ def test_retry_lesson_keeps_only_real_files_and_no_search_words(lesson_store, mo
     run(writer_llm(), critic)
     lesson = lesson_store.saved[0]["lesson"]
     assert "ignore" not in lesson and "praise" not in lesson
+
+
+class LookupSearcher:
+    """A search index holding one function, get_file, and one README chunk."""
+    def search(self, query, n=5, path_prefix=""):
+        out = [{"meta": {"file": "src/tools.py", "name": "build_tools.get_file", "start_line": 10,
+                         "end_line": 14, "kind": "function"},
+                "text": "# File: src/tools.py\n# Symbol: build_tools.get_file\ndef get_file(path):\n    return text"},
+               {"meta": {"file": "README.md", "name": "", "start_line": 1, "end_line": 20, "kind": "doc"},
+                "text": "# File: README.md\nget_file reads files"}]
+        return out[:n]
+
+
+def test_question_naming_a_function_gets_its_definition_without_a_model_search(lesson_store, monkeypatch):
+    # Real run: "what does get_file return?" -> the model called its OWN get_file tool on README.md
+    # and never searched, so the answer had no code. The definition is now looked up in code.
+    monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: LookupSearcher())
+    seen = {}
+
+    class Capture(FakeResearchGraph):
+        def stream(self, inputs, config=None, stream_mode=None):
+            seen["task"] = inputs["messages"][0].content
+            yield from super().stream(inputs, config, stream_mode)
+
+    monkeypatch.setattr(team, "build_graph", lambda repo, llm, prompt: Capture())
+    events = run(writer_llm(), FakeLLM({"CRITIC": ['{"score": 5}']}), question="what does get_file return?")
+    assert "EXACT-NAME LOOKUP" in seen["task"] and "def get_file(path):" in seen["task"]
+    assert "README.md" not in seen["task"]                   # only DEFINITIONS are looked up
+    assert any(e["type"] == "lookup" and "src/tools.py:10-14" in e["text"] for e in events)
+
+
+def test_plain_question_gets_no_lookup(lesson_store, monkeypatch):
+    monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: LookupSearcher())
+    events = run(writer_llm(), FakeLLM({"CRITIC": ['{"score": 5}']}), question="how are files read?")
+    assert not any(e["type"] == "lookup" for e in events)

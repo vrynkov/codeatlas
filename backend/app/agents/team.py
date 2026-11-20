@@ -188,6 +188,37 @@ def repo_terms_in(question: str, repo_name: str, limit: int = 3) -> list[str]:
     return hits[:limit]
 
 
+_LOOKUP_MAX_LINES = 60
+
+
+def _exact_name_lookup(question: str, repo_name: str, per_name: int = 2) -> list[dict]:
+    """For each code name in the question (get_file, HTTPAdapter), the chunks that DEFINE it, read
+    straight from the index - no model call. [] if there are none or the index can't be read.
+    Each hit: {"name", "file", "ref" ("path:start-end"), "text" (the code, as search_code shows it)}."""
+    try:
+        from ..tools.search import code_names, get_searcher
+        names = code_names(question)
+        found = [(name, r) for name in names for r in get_searcher(repo_name).search(name, n=per_name)]
+    except Exception:  # noqa: BLE001  a failure here must never break the answer itself
+        return []
+    hits, seen = [], set()
+    for name, r in found:
+        m = r["meta"]
+        symbol = m.get("name") or ""
+        defines = symbol == name or symbol.endswith("." + name) or m["file"] == name \
+            or m["file"].endswith("/" + name)
+        ref = f"{m['file']}:{m['start_line']}-{m['end_line']}"
+        if not defines or ref in seen:
+            continue
+        seen.add(ref)
+        body = [ln for ln in r["text"].splitlines() if not ln.startswith(("# File:", "# Symbol:"))]
+        label = f" {symbol}" if symbol else ""
+        text = (f"--- {m['file']} (lines {m['start_line']}-{m['end_line']}, {m['kind']}{label})\n"
+                + "\n".join(body[:_LOOKUP_MAX_LINES]))
+        hits.append({"name": name, "file": m["file"], "ref": ref, "text": text})
+    return hits
+
+
 def real_files(repo_name: str) -> set[str]:
     """Every file path in the repo's search index ({} if it can't be read - never raises)."""
     try:
@@ -299,12 +330,24 @@ def build_team_graph(repo_name: str, llm, critic_llm=None, mode: str = "team"):
                          f"<hints>\n{tips}\n</hints>")
                 lessons_used = [h["lesson"] for h in hits]
                 _emit("memory", "recall", f"using {len(hits)} past lesson(s)")
+        lookup = _exact_name_lookup(state["question"], repo_name) if state["attempts"] == 0 else []
+        for hit in lookup:
+            _emit("researcher", "lookup", f"exact name {hit['name']} -> {hit['ref']}")
+        if lookup:
+            # Done in code, not left to the model: a question that names get_file must read the
+            # get_file definition. (A real run asked "what does get_file return?", the model called
+            # its OWN get_file tool on README.md, never searched, and described that output.)
+            task += ("\n\nEXACT-NAME LOOKUP, done for you by code. The question names code that is "
+                     "defined in this repo. Base your findings on this code first and cite it; read more "
+                     "of it with get_file if needed:\n" + "\n\n".join(h["text"] for h in lookup))
         if state["advice"]:  # second attempt: include the critic's feedback
             task += ("\n\nA reviewer checked your previous findings and gave this advice. "
                      f"Investigate it specifically:\n{state['advice']}")
         graph = build_graph(repo_name, llm, RESEARCHER_PROMPT)
         findings, evidence = "", list(state["evidence"])
         files = set(state["files"])
+        evidence += [h["text"] for h in lookup]  # the Explainer (and Critic) see the definition too
+        files.update(h["file"] for h in lookup)
         try:
             for update in graph.stream({"messages": [HumanMessage(task)]},
                                        {"recursion_limit": MAX_AGENT_STEPS * 2 + 1}, stream_mode="updates"):
