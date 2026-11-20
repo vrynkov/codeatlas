@@ -260,7 +260,8 @@ def test_question_naming_a_function_gets_its_definition_without_a_model_search(l
 
     monkeypatch.setattr(team, "build_graph", lambda repo, llm, prompt: Capture())
     events = run(writer_llm(), FakeLLM({"CRITIC": ['{"score": 5}']}), question="what does get_file return?")
-    assert "EXACT-NAME LOOKUP" in seen["task"] and "def get_file(path):" in seen["task"]
+    assert "EXACT-NAME LOOKUP" in seen["task"] and "10: def get_file(path):" in seen["task"]
+    assert "11:     return text" in seen["task"]          # numbered, so citations use real lines
     assert "README.md" not in seen["task"]                   # only DEFINITIONS are looked up
     assert any(e["type"] == "lookup" and "src/tools.py:10-14" in e["text"] for e in events)
 

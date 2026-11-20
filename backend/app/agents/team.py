@@ -213,8 +213,11 @@ def _exact_name_lookup(question: str, repo_name: str, per_name: int = 2) -> list
         seen.add(ref)
         body = [ln for ln in r["text"].splitlines() if not ln.startswith(("# File:", "# Symbol:"))]
         label = f" {symbol}" if symbol else ""
+        # Numbered like get_file's output, so the model cites exact lines instead of guessing
+        # them inside the range (a real run cited 73-78 for code that is on lines 81-84).
+        numbered = [f"{m['start_line'] + i}: {ln}" for i, ln in enumerate(body[:_LOOKUP_MAX_LINES])]
         text = (f"--- {m['file']} (lines {m['start_line']}-{m['end_line']}, {m['kind']}{label})\n"
-                + "\n".join(body[:_LOOKUP_MAX_LINES]))
+                + "\n".join(numbered))
         hits.append({"name": name, "file": m["file"], "ref": ref, "text": text})
     return hits
 
