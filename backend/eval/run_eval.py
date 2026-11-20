@@ -5,6 +5,10 @@ Run from backend/ (with the venv active):
     python -m eval.run_eval codeatlas                  # a repo the models have never seen (see README)
     python -m eval.run_eval requests --clear-lessons   # test WITHOUT self-improvement, as a baseline
     python -m eval.run_eval codeatlas --no-lessons     # ignore saved lessons (without deleting them)
+    python -m eval.run_eval codeatlas --mode single    # run single mode instead (default: --mode team)
+
+--mode picks the pipeline: team (default here, so old result files stay comparable) or single.
+Team results are saved as <repo>-<time>.json, single-mode results as <repo>-mode-single-<time>.json.
 
 Questions come from eval/questions_<repo>.json if that file exists, else eval/questions.json.
 Compare against "the same model with NO search at all" with:  python -m eval.baseline <repo>
@@ -41,16 +45,34 @@ def _crashed_before_routing(row: dict) -> bool:
     return bool(row.get("error")) and not row["route"]
 
 
-def run(repo: str, questions: list[dict]) -> list[dict]:
+def parse_mode(argv: list[str]) -> str:
+    """--mode single|team. The eval defaults to TEAM (not the MODE env var) so that a plain
+    `python -m eval.run_eval codeatlas` measures the same thing it always did."""
+    if "--mode" not in argv:
+        return "team"
+    i = argv.index("--mode")
+    mode = argv[i + 1] if i + 1 < len(argv) else ""
+    if mode not in ("single", "team"):
+        sys.exit(f"--mode must be 'single' or 'team', got {mode!r}")
+    return mode
+
+
+def results_name(repo: str, mode: str, stamp: str) -> str:
+    """Team files keep their old name, so eval.compare_setups still finds them as 'Full team'."""
+    return f"{repo}-{stamp}.json" if mode == "team" else f"{repo}-mode-{mode}-{stamp}.json"
+
+
+def run(repo: str, questions: list[dict], mode: str = "team") -> list[dict]:
     print(f"Writer model order : {' -> '.join(MODEL_CHAIN)} "
           f"(falls forward automatically if one hits its limit)\n"
-          f"Critic model order : {' -> '.join(CRITIC_MODEL_CHAIN)} (a different model grades the answer)\n",
+          f"Critic model order : {' -> '.join(CRITIC_MODEL_CHAIN)} (a different model grades the answer)\n"
+          f"Mode               : {mode}" + ("  (no critic: 'passed review' is n/a)" if mode == "single" else "") + "\n",
           file=sys.stderr)
     rows = []
     last_model = None
     for i, item in enumerate(questions, 1):
         print(f"[{i}/{len(questions)}] {item['id']}: {item['question'][:60]}", file=sys.stderr)
-        r = run_one(repo, item)
+        r = run_one(repo, item, mode=mode)
         row = score_item(item, r, repo)
         rows.append(row)
         if row.get("model") and row["model"] != last_model:
@@ -86,6 +108,7 @@ def summarize(rows: list[dict]) -> dict:
     # dropped the failures from the averages and made the numbers look better than they were.)
     research = [r for r in routed if "critic_score" in r]
     scored = [r for r in research if r.get("critic_score") is not None]
+    reviewed = [r for r in research if r.get("passed") is not None]
     n, n_routed = len(rows), len(routed)
     cites = sum(r.get("citations", 0) for r in research)
     return {
@@ -95,7 +118,8 @@ def summarize(rows: list[dict]) -> dict:
         "any_model_switch": any(r.get("model_switched") for r in rows),
         "routing_accuracy": sum(r["route_ok"] for r in routed) / n_routed if n_routed else None,
         "n_research": len(research),
-        "pass_rate": sum(bool(r.get("passed")) for r in research) / len(research) if research else None,
+        # Rows with passed=None had no Critic (single mode), so "passed review" doesn't apply to them.
+        "pass_rate": (sum(bool(r["passed"]) for r in reviewed) / len(reviewed)) if reviewed else None,
         "critic_failures": sum(bool(r.get("critic_failed")) for r in research),
         "critic_same_model": sum(bool(r.get("critic_same_model")) for r in research),
         "avg_critic_score": sum(r["critic_score"] for r in scored) / len(scored) if scored else None,
@@ -139,8 +163,11 @@ def print_summary(title: str, s: dict) -> None:
     else:
         print(f"Routing accuracy   : {s['routing_accuracy']:.0%}  ({s['n_questions'] - s['n_crashed']} questions)")
     if s.get("n_research"):
-        print(f"Passed review      : {_pct(s.get('pass_rate'))}  ({s['n_research']} research questions; "
-              f"a broken review, misroute or error counts as FAIL)")
+        if s.get("pass_rate") is None:
+            print(f"Passed review      : n/a  (no critic in single mode; {s['n_research']} research questions)")
+        else:
+            print(f"Passed review      : {_pct(s.get('pass_rate'))}  ({s['n_research']} research questions; "
+                  f"a broken review, misroute or error counts as FAIL)")
         if s.get("critic_failures"):
             print(f"(!) Broken reviews : {s['critic_failures']}  (critic returned no usable score - counted as fail)")
         if s.get("critic_same_model"):
@@ -180,13 +207,15 @@ if __name__ == "__main__":
     if no_lessons:
         disable_lesson_recall()
 
+    mode = parse_mode(sys.argv)
     items = questions_for(repo)
-    rows = run(repo, items)
+    rows = run(repo, items, mode)
     summary = summarize(rows)
+    summary["mode"] = mode
     summary["lessons_used"] = not no_lessons and "--clear-lessons" not in sys.argv
-    print_summary(f"CodeAtlas eval - {repo}", summary)
+    print_summary(f"CodeAtlas eval - {repo} ({mode} mode)", summary)
 
     RESULTS_DIR.mkdir(exist_ok=True)
-    out = RESULTS_DIR / f"{repo}-{time.strftime('%Y%m%d-%H%M%S')}.json"
+    out = RESULTS_DIR / results_name(repo, mode, time.strftime('%Y%m%d-%H%M%S'))
     out.write_text(json.dumps({"summary": summary, "rows": rows}, indent=2))
     print(f"\nSaved detailed results to {out}")

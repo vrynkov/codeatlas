@@ -17,6 +17,7 @@ class RunResult:
     id: str
     question: str
     route: str = ""
+    mode: str = ""     # "single" or "team", as reported by the pipeline itself
     final: str = ""
     critic_scores: list = field(default_factory=list)  # one entry per review: an int, or None = BROKEN review
     critic_models: list = field(default_factory=list)  # which model did each review
@@ -85,18 +86,21 @@ def cost_summary(rows: list[dict]) -> dict:
             "avg_seconds": avg("seconds"), "avg_llm_seconds": avg("llm_seconds")}
 
 
-def run_one(repo: str, item: dict, llm=None) -> RunResult:
+def run_one(repo: str, item: dict, llm=None, mode: str | None = None) -> RunResult:
+    """mode: "single" or "team"; None = whatever the MODE env var says (default single)."""
     r = RunResult(id=item["id"], question=item["question"])
     with measured(r):
-        _run_team_into(r, repo, item, llm)
+        _run_team_into(r, repo, item, llm, mode)
     r.cited_files = sorted({f.split("/")[-1] for f in _FILE_RE.findall(r.final)})
     return r
 
 
-def _run_team_into(r: RunResult, repo: str, item: dict, llm) -> None:
+def _run_team_into(r: RunResult, repo: str, item: dict, llm, mode: str | None = None) -> None:
     try:
-        for ev in run_team(repo, item["question"], llm=llm):
-            if ev["agent"] == "supervisor" and ev["type"] == "route":
+        for ev in run_team(repo, item["question"], llm=llm, mode=mode):
+            if ev["agent"] == "mode" and ev["type"] == "info":
+                r.mode = ev["text"]
+            elif ev["agent"] == "supervisor" and ev["type"] == "route":
                 r.route = ev["text"].split()[0].strip()
             elif ev["agent"] == "critic" and ev["type"] == "review":
                 m = _SCORE_RE.search(ev["text"])
@@ -153,7 +157,7 @@ def score_item(item: dict, r: RunResult, repo: str | None = None) -> dict:
     filename appears ANYWHERE in the answer, even in prose with no line number. A big gap
     between the two usually means the model named the right file conversationally rather
     than in the strict citation format, not that it got the wrong file."""
-    out = {"id": r.id, "route_ok": r.route == item["expected_route"], "route": r.route,
+    out = {"id": r.id, "mode": r.mode, "route_ok": r.route == item["expected_route"], "route": r.route,
            "model": r.final_model, "model_switched": r.final_model != MODEL_CHAIN[0], "error": r.error,
            "answer": r.final,  # saved in full so a low score can actually be diagnosed later
            **cost_fields(r)}
@@ -163,11 +167,13 @@ def score_item(item: dict, r: RunResult, repo: str | None = None) -> dict:
     exp_files = item.get("expected_files", [])
     exp_kw = item.get("expected_keywords", [])
     writer = r.final_model
+    reviewed = r.mode != "single"  # single mode has no Critic: "passed review" doesn't apply (None, not False)
     out.update({
         "critic_score": r.last_score,
         # A broken review is a FAIL, never a pass, and the row stays in every average.
         "critic_failed": r.critic_failed,
-        "passed": (not r.error) and r.route == "research" and r.last_score is not None and r.last_score >= PASS_SCORE,
+        "passed": ((not r.error) and r.route == "research" and r.last_score is not None
+                   and r.last_score >= PASS_SCORE) if reviewed else None,
         "critic_model": r.critic_models[-1] if r.critic_models else None,
         # The critic is meant to be a DIFFERENT model from the writer; flag when fallback made them equal.
         "critic_same_model": bool(r.critic_models) and r.critic_models[-1] == writer,

@@ -8,7 +8,8 @@ Tools exposed here:
   list_repos     which repositories are indexed
   search_code    find code/docs by meaning + keywords
   get_file       read lines of a file (with line numbers)
-  ask_codeatlas  run the FULL agent team (researcher -> explainer -> critic) and get a verified answer
+  ask_codeatlas  get a cited answer: researcher -> explainer (MODE=single, default), or the full team
+                 with a critic that checks the answer (MODE=team)
   rate_answer    tell CodeAtlas if an answer helped, so it can learn (self-improvement)
 
 Run (from backend/):
@@ -37,8 +38,8 @@ mcp = MCPServer(
     instructions=(
         "CodeAtlas answers questions about indexed GitHub repositories. "
         "Call list_repos first. For a quick lookup use search_code / get_file. "
-        "For 'how does X work?' questions use ask_codeatlas, which runs a team of agents and "
-        "checks its own answer against the code. Afterwards, call rate_answer to help it learn."
+        "For 'how does X work?' questions use ask_codeatlas, which researches the code and "
+        "writes an answer with file:line citations. Afterwards, call rate_answer to help it learn."
     ),
 )
 
@@ -83,8 +84,8 @@ def get_file(repo: str, path: str, start_line: int = 1, end_line: int = 80) -> s
 
 @mcp.tool()
 async def ask_codeatlas(repo: str, question: str, ctx: Context) -> str:
-    """Ask a question about a repository. A team of agents researches the code, writes an explanation
-    with file:line citations, and a critic checks it against the code. Takes ~30-90 seconds."""
+    """Ask a question about a repository. An agent researches the code and an explainer writes an
+    answer with file:line citations (with MODE=team a critic also checks it). Takes ~20-90 seconds."""
     _check(repo)
     events = run_team(repo, question)  # a normal (blocking) generator, so we step it in a worker thread
     done, answer, step = object(), "", 0

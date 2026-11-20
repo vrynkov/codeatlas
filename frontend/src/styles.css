@@ -238,6 +238,7 @@ input::placeholder { color: var(--text-dim); }
 .tag.model      { background: rgba(200,155,60,0.10); color: var(--paper-dim); }
 .tag.error      { background: rgba(181,72,47,0.25); color: var(--brick); }
 .tag.team       { background: rgba(200,155,60,0.28); color: var(--gold); }
+.tag.mode       { background: rgba(74,155,149,0.10); color: var(--paper-dim); }
 .tag.stopped    { background: rgba(147,160,172,0.2); color: var(--text-dim); }
 
 .stop-btn { border-color: var(--brick); color: var(--brick); }

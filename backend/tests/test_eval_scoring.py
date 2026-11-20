@@ -8,7 +8,7 @@ ITEM = {"id": "q1", "question": "How?", "expected_route": "research",
 
 
 def fake_run(events):
-    return lambda repo, question, llm=None: iter(events)
+    return lambda repo, question, llm=None, **kw: iter(events)
 
 
 def test_broken_review_counts_as_fail(monkeypatch):

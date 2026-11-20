@@ -30,6 +30,18 @@ MAX_TOOL_OUTPUT_CHARS = 3000  # keep tool results small: Groq's free tier has a 
 KEEP_FULL_TOOL_RESULTS = 2
 TRIMMED_TOOL_RESULT_CHARS = 400
 
+# --- Which pipeline answers questions: MODE=single (default) or MODE=team ---
+# single = Researcher (a ReAct agent that searches the code) + ONE Explainer call that writes the
+#          cited answer. ~3x cheaper; the comparison eval found it finds the right code about as well.
+# team   = the full 4-agent flow: Supervisor -> Researcher -> Explainer -> Critic (+ one retry).
+#          Kept for comparison runs and demos.
+MODES = ("single", "team")
+MODE = os.getenv("MODE", "single").strip().lower() or "single"
+if MODE not in MODES:
+    # Fail loudly at startup: a typo like MODE=tema must not silently run a different pipeline.
+    raise ValueError(f"MODE must be one of {MODES}, got {os.getenv('MODE')!r}. Fix it in backend/.env "
+                     f"or the Cloud Run env vars.")
+
 # --- Multi-agent team settings ---
 MAX_ATTEMPTS = 2          # research attempts per question (1 first try + 1 retry after the Critic's feedback)
 PASS_SCORE = 4            # the Critic gives 1-5; this score or higher = answer accepted

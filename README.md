@@ -4,7 +4,7 @@
 
 **An AI team that reads a public GitHub repository's code and docs and answers questions about it, with citations you can check.**
 
-Ask "How are retries handled?" about any indexed repo. A team of agents (built with LangChain and LangGraph) searches the actual code, reads it, writes an answer, and has a second agent check that answer against the evidence before you see it. The whole thing runs on free-tier infrastructure.
+Ask "How are retries handled?" about any indexed repo. An agent (built with LangChain and LangGraph) searches the actual code, reads it, and an Explainer writes an answer with `file:line` citations. A full four-agent team, with a Critic that checks the answer against the evidence, is still available as a second mode (see [Two modes](#two-modes-single-and-team)). The whole thing runs on free-tier infrastructure.
 
 ## Who it's for
 
@@ -79,6 +79,27 @@ flowchart LR
 4. **Critic** — independently scores the answer against the actual evidence (1-5); a low score sends it back for one retry with specific feedback
 5. **Lessons** — when a retry was needed and then succeeded, what worked gets saved (for example, "in this repo, auth lives in `/services/auth`"); future similar questions get that as a hint (self-improvement without retraining anything)
 
+## Two modes: single and team
+
+One setting, `MODE`, picks the pipeline. Set it in `backend/.env` or as a Cloud Run env var. Default: `single`.
+
+| | `MODE=single` (default) | `MODE=team` |
+|---|---|---|
+| Steps | Supervisor check → Researcher → Explainer | Supervisor → Researcher → Explainer → Critic (→ one retry) |
+| Model calls per question | about 6 (estimate, not measured yet) | 8 to 11 (measured) |
+| Checks its own answer | No | Yes: the Critic scores it 1-5; a low score is retried, then shown with a "Confidence: low" note |
+| Saves lessons after a retry | No (there is no retry) | Yes |
+
+Both modes share everything else: the same search tools, the same SSE events for the browser, the same off-topic reply, the same citation repair (`_fix_citation_paths`), the same rate limits and the same MCP tool.
+
+**How single mode handles off-topic questions.** It first checks, in plain code and for free, whether the question uses words from the repo's index (e.g. "CX" in an NDEx repo). If it does, the question goes straight to research with **no** routing model call. That's the same decision the team makes, because since PR #20 the team overrules a "chat" route in that case anyway. Only when no repo word matches does single mode ask the Supervisor prompt (one short call), so "what's the weather today?" still gets the polite refusal.
+
+**When to use which:**
+- **`single`: normal use and the deployed app.** The [team vs one agent comparison](#team-vs-one-agent-2026-11-13-to-11-14) found the extra agents don't help find the code; the Explainer is what produces precise citations, and single mode keeps it. Fewer calls per minute also means fewer rate-limit waits and fewer answers pushed onto smaller backup models on Groq's free tier.
+- **`team`: comparisons and demos.** Use it to measure whether the Critic earns its cost (`python -m eval.run_eval codeatlas --mode team`), or to show the multi-agent pipeline working in the UI's log.
+
+Not measured yet: single mode itself (agent + Explainer) has not been through the eval. The comparison above measured the bare agent with no Explainer. Run `python -m eval.run_eval codeatlas --mode single --no-lessons` and then `python -m eval.compare_setups codeatlas` to get its row.
+
 ## Tech stack
 
 | Piece | Choice | Why |
@@ -120,7 +141,7 @@ cd backend
 pip install -r requirements-dev.txt
 pytest
 ```
-They cover the agent loop (retry, give-up, broken-review handling), model fallback, citation repair, the eval's scoring rules, and every abuse protection below. They run in GitHub Actions on every push and on every pull request, and a branch rule on `main` blocks merging a pull request until the `pytest` check passes.
+They cover both modes (single: no critic, one Explainer call, free routing check; team: retry, give-up, broken-review handling), model fallback, citation repair, the eval's scoring rules, and every abuse protection below. They run in GitHub Actions on every push and on every pull request, and a branch rule on `main` blocks merging a pull request until the `pytest` check passes.
 
 **Try the MCP server** (see [`scripts/mcp_client_demo.py`](backend/scripts/mcp_client_demo.py)):
 ```bash
@@ -145,6 +166,7 @@ An eval that grades itself proves little, so:
 ```bash
 python -m app.indexing.indexer index https://github.com/vrynkov/codeatlas
 python -m eval.run_eval codeatlas --no-lessons   # the full team (no hints from earlier runs)
+python -m eval.run_eval codeatlas --mode single --no-lessons   # the app's default: agent + Explainer
 python -m eval.single_agent codeatlas            # one ReAct agent, no team
 python -m eval.baseline codeatlas                # the same model, no search
 python -m eval.compare_setups codeatlas          # one table for all three
@@ -256,7 +278,7 @@ Is the four-agent team worth it, or would one agent do the job? Same 10 code que
 - **Both setups ended up on smaller models** (team: 3 of 10 answers by `gpt-oss-120b`, one agent: 4 of 10). I expected the one agent, with fewer calls per minute, to stay on the big model much more often. It didn't.
 - **No search at all** finds nothing: 0 of 10 files named, and both of its citations were made up. The search tools are what make the answers real.
 
-**Verdict.** The extra agents don't help *find* the code. What they buy is precise, clickable citations, at ~2.7x the cost. The Supervisor and the Critic don't show a measurable benefit here. **What I'd change:** one ReAct agent plus a single formatting step like the Explainer (about 6 calls instead of 11), then measure that against both setups above. With 10 questions, only large gaps count. The 50-point gap on citations is large. The 10-point gap on finding the file is not.
+**Verdict.** (Acted on 2026-11-20: the app now defaults to `MODE=single`, see [Two modes](#two-modes-single-and-team).) The extra agents don't help *find* the code. What they buy is precise, clickable citations, at ~2.7x the cost. The Supervisor and the Critic don't show a measurable benefit here. **What I'd change:** one ReAct agent plus a single formatting step like the Explainer (about 6 calls instead of 11), then measure that against both setups above. With 10 questions, only large gaps count. The 50-point gap on citations is large. The 10-point gap on finding the file is not.
 
 ### Measure, find, fix, measure again (2026-11-12 to 11-13)
 
@@ -326,7 +348,7 @@ frontend/
 ```
 
 **Key files, linked for quick navigation** (GitHub won't make the tree above clickable, since it's a code block):
-- [`app/agents/team.py`](backend/app/agents/team.py) — the LangGraph team: Supervisor, Researcher, Explainer, Critic, and the retry loop
+- [`app/agents/team.py`](backend/app/agents/team.py) — the LangGraph pipeline for both modes: Supervisor, Researcher, Explainer, Critic (team mode only), and the retry loop
 - [`app/agents/react_agent.py`](backend/app/agents/react_agent.py) — the hand-built ReAct loop the Researcher runs
 - [`app/agents/llm.py`](backend/app/agents/llm.py) — automatic model fallback across Groq's daily/short-term rate limits
 - [`app/tools/search.py`](backend/app/tools/search.py) — hybrid (vector + BM25) code search
@@ -368,6 +390,13 @@ gcloud run deploy codeatlas --source . --port 7860 --region us-central1
 --allow-unauthenticated --memory 2Gi --timeout=1800
 --set-secrets=GROQ_API_KEY=groq-api-key:latest --no-cpu-throttling --max-instances=1
 ```
+
+No flag is needed for the mode: the app uses `MODE=single` unless told otherwise. To switch the live app to the full team for a demo, and back:
+```bash
+gcloud run services update codeatlas --project YOUR_PROJECT_ID --region us-central1 --update-env-vars MODE=team
+gcloud run services update codeatlas --project YOUR_PROJECT_ID --region us-central1 --update-env-vars MODE=single
+```
+A typo such as `MODE=tema` stops the app at startup with a clear error, instead of quietly running the wrong pipeline.
 
 ### Why these flags matter
 
