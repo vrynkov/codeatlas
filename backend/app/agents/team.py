@@ -109,6 +109,17 @@ _CITATION = re.compile(
 _BACKTICK_PATH = re.compile(r"`(?P<path>[\w .\-/]+\.\w{1,4})`")
 
 
+# A citation in the 【...】 brackets some models use: 【path:1-20】, 【path†L1-L20】 or 【path】.
+_BRACKET_CITATION = re.compile(r"[ \t]*【\s*(?P<path>[^\s†:【】]+?)\s*(?:(?::|†L?)(?P<a>\d+)(?:\s*[-‑–—]\s*L?(?P<b>\d+))?)?\s*】")
+
+
+def _unbracket(m: "re.Match") -> str:
+    lines = m.group("a") and (m.group("a") + (f"-{m.group('b')}" if m.group("b") else ""))
+    cite = f"`{m.group('path')}:{lines}`" if lines else f"`{m.group('path')}`"
+    at_line_start = m.start() == 0 or m.string[m.start() - 1] in "\n(["
+    return cite if at_line_start else " " + cite
+
+
 # Appended to a file path the model made up, so the reader is warned instead of misled. The eval
 # counts this exact text to report how many invented paths the filter caught.
 NOT_FOUND_LABEL = " (not found in this repo)"
@@ -204,6 +215,10 @@ def _fix_citation_paths(text: str, repo_name: str) -> str:
       * if SEVERAL indexed files match (a real file, but we can't tell which), make it plain text
         without a label - it isn't invented, just ambiguous.
     Done in code, not the prompt, because free models don't reliably obey "only cite real files"."""
+    # Some models (gpt-oss) cite in their own style: 【README.md:1-20】 or 【README.md†L1-L20】.
+    # Turn those into the normal `path:lines` form first, so the checks below and the UI's
+    # links treat them like every other citation.
+    text = _BRACKET_CITATION.sub(_unbracket, text)
     real = real_files(repo_name)
     if not real:
         return text

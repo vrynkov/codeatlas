@@ -48,3 +48,18 @@ def test_no_index_means_text_is_left_alone(monkeypatch):
 
 def test_cited_files_lists_each_path_once():
     assert team.cited_files("a `x/a.py:1-2` and x/a.py:5 and `b.md:3`") == ["x/a.py", "b.md"]
+
+
+@pytest.mark.parametrize("raw, expected", [
+    # gpt-oss's own citation style (seen in a real answer) becomes the normal `path:lines` form
+    ("printed after that JSON header【README.md:1-20】.", "printed after that JSON header `README.md:1-20`."),
+    ("See (【search.py†L10-L20】)", "See (`backend/app/tools/search.py:10-20`)"),
+    ("【backend/app/agents/team.py】 holds it", "`backend/app/agents/team.py` holds it"),
+])
+def test_bracket_citations_are_converted_and_checked(raw, expected):
+    assert fix(raw) == expected
+
+
+def test_invented_file_in_brackets_is_still_caught():
+    out = fix("It is here【backend/app/auth/login.py:4】.")
+    assert "【" not in out and "backend/app/auth/login.py" + team.NOT_FOUND_LABEL in out

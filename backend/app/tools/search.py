@@ -16,6 +16,24 @@ def _tokenize(text: str) -> list[str]:
     return [t.lower() for t in re.findall(r"[A-Za-z0-9]+", text)]
 
 
+# Names shaped like code: get_file, search.py, HTTPAdapter, getFile, bm25. Plain words never match.
+_CODE_TOKEN = re.compile(r"[A-Za-z_][\w.]*\w")
+
+
+def code_names(query: str) -> list[str]:
+    """The exact code names in a search query, e.g. "what does get_file return" -> ["get_file"].
+    BM25 alone splits get_file into "get" + "file", two words that appear in half the repo (the
+    README says "file" a lot), so the real definition can lose to prose. These names are matched
+    exactly instead."""
+    out = []
+    for t in _CODE_TOKEN.findall(query):
+        t = t.strip(".")
+        if ("_" in t or "." in t or re.search(r"[a-z][A-Z]|[A-Z]{2,}[a-z]", t)
+                or (re.search(r"[A-Za-z]", t) and re.search(r"\d", t))):
+            out.append(t)
+    return list(dict.fromkeys(out))
+
+
 class RepoNotIndexedError(Exception):
     """Raised when someone asks about a repo that was never indexed (or whose index was lost,
     e.g. after a fresh checkout, since data/ is never committed to git)."""
@@ -53,8 +71,27 @@ class RepoSearcher:
         for ranking in (vec_rank, kw_rank):
             for cid, r in ranking.items():
                 fused[cid] = fused.get(cid, 0) + 1 / (60 + r)
+        # 4) exact code names (get_file, HTTPAdapter): chunks that USE the name join the fusion,
+        #    and the chunks that DEFINE it are put first, so "what does get_file return?" opens
+        #    the function itself, not a README paragraph that mentions files.
+        names = code_names(query)
+        defs = []
+        if names:
+            uses = {}
+            for i, doc in enumerate(self.docs):
+                symbol = self.metas[i].get("name") or ""
+                for name in names:
+                    if (symbol == name or symbol.endswith("." + name) or self.metas[i]["file"] == name
+                            or self.metas[i]["file"].endswith("/" + name)):
+                        defs.append(self.ids[i])
+                    elif re.search(rf"(?<![\w.]){re.escape(name)}(?!\w)", doc):
+                        uses[self.ids[i]] = uses.get(self.ids[i], 0) + 1
+            for r, cid in enumerate(sorted(uses, key=uses.get, reverse=True)[:k]):
+                fused[cid] = fused.get(cid, 0) + 1 / (60 + r)
         by_id = {cid: i for i, cid in enumerate(self.ids)}
         ranked = sorted(fused, key=fused.get, reverse=True)
+        defs = list(dict.fromkeys(defs))[:3]  # a big file has many chunks: pin only its first few
+        ranked = defs + [c for c in ranked if c not in set(defs)]
         if path_prefix:
             ranked = [c for c in ranked if self.metas[by_id[c]]["file"].startswith(path_prefix)]
         best = ranked[:n]
