@@ -109,6 +109,17 @@ _CITATION = re.compile(
 _BACKTICK_PATH = re.compile(r"`(?P<path>[\w .\-/]+\.\w{1,4})`")
 
 
+# A citation in the 【...】 brackets some models use: 【path:1-20】, 【path†L1-L20】 or 【path】.
+_BRACKET_CITATION = re.compile(r"[ \t]*【\s*(?P<path>[^\s†:【】]+?)\s*(?:(?::|†L?)(?P<a>\d+)(?:\s*[-‑–—]\s*L?(?P<b>\d+))?)?\s*】")
+
+
+def _unbracket(m: "re.Match") -> str:
+    lines = m.group("a") and (m.group("a") + (f"-{m.group('b')}" if m.group("b") else ""))
+    cite = f"`{m.group('path')}:{lines}`" if lines else f"`{m.group('path')}`"
+    at_line_start = m.start() == 0 or m.string[m.start() - 1] in "\n(["
+    return cite if at_line_start else " " + cite
+
+
 # Appended to a file path the model made up, so the reader is warned instead of misled. The eval
 # counts this exact text to report how many invented paths the filter caught.
 NOT_FOUND_LABEL = " (not found in this repo)"
@@ -117,9 +128,7 @@ NOT_FOUND_LABEL = " (not found in this repo)"
 OFF_TOPIC_REPLY = ("I'm sorry, this looks like a general question that is not about this repository. "
                    "I can only help with questions about the code in the repository.")
 
-# Everyday English words. A question word that ALSO appears in the repo only counts as a sign the
-# question is about the repo if it is not one of these (almost every repo has "the", "you", "day"
-# somewhere in its comments).
+# Everyday English words, used only to ignore SHOUTED words ("WHAT IS THE WEATHER") below.
 _COMMON_WORDS = frozenset("""
 a about after again all also am an and any are as at be been before but by can could day did do does
 doing for from get go good got had has have he hello her hey hi him his how i if in is it its just
@@ -129,17 +138,88 @@ what when where which who why will with would yes yesterday you your bye goodbye
 afternoon time weekend game score news joke ok okay
 """.split())
 
+# A token of the question as typed: letters, digits and the characters code names use.
+_RAW_TOKEN = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_./\-]*[A-Za-z0-9_]|[A-Za-z0-9]")
+
+
+def _looks_like_code(token: str, shouting: bool) -> bool:
+    """True for tokens shaped like code, which plain English words never are:
+    get_file, search.py, app/main.py, HTTPAdapter, getFile, NDEx, bm25, CX, API.
+    Plain words ("decide", "whether", "critic", "network") are False: lots of them appear in
+    any repo's comments, so they say nothing about whether the question is about THIS repo."""
+    if any(ch in token for ch in "_./"):
+        return True                                    # get_file, search.py, app/main.py
+    if re.search(r"[a-z][A-Z]|[A-Z]{2,}[a-z]", token):
+        return True                                    # getFile, HTTPAdapter, NDEx
+    if re.search(r"[A-Za-z]", token) and re.search(r"\d", token):
+        return True                                    # bm25, utf8, v2
+    if len(token) >= 2 and token.isupper():           # CX, API, JSON - unless the user is shouting
+        return not shouting and token.lower() not in _COMMON_WORDS
+    return False
+
+
+def _repo_text(searcher) -> str:
+    """All of the repo's indexed chunks as one lowercase string (built once per searcher)."""
+    text = getattr(searcher, "_codeatlas_text", None)
+    if text is None:
+        text = "\n".join(searcher.docs).lower()
+        searcher._codeatlas_text = text
+    return text
+
 
 def repo_terms_in(question: str, repo_name: str, limit: int = 3) -> list[str]:
-    """Words of the question that also appear in the repo's indexed code ([] if the index can't be
-    read). Example: in an NDEx repo, "what is CX network?" -> ["cx", "network"]."""
+    """Code-like tokens of the question that also appear, as a whole word, in the repo's indexed
+    code ([] if the index can't be read). Free: no model call.
+    Example, NDEx repo: "what is CX network?" -> ["CX"].
+    Example, any repo: "should I decide whether to buy a car?" -> [] (no code-like token), so the
+    model decides the route instead of a common word deciding it."""
     try:
-        from ..tools.search import _tokenize, get_searcher
-        vocab = get_searcher(repo_name).bm25.idf  # every word in the repo's chunks -> its weight
+        from ..tools.search import get_searcher
+        text = _repo_text(get_searcher(repo_name))
     except Exception:  # noqa: BLE001  a failure here must never break the answer itself
         return []
-    words = dict.fromkeys(w for w in _tokenize(question) if len(w) >= 2 and w not in _COMMON_WORDS)
-    return [w for w in words if w in vocab][:limit]
+    tokens = _RAW_TOKEN.findall(question)
+    words = [t for t in tokens if any(c.isalpha() for c in t)]
+    shouting = len(words) >= 2 and all(t.isupper() for t in words)  # the whole question in CAPS
+    hits = []
+    for t in dict.fromkeys(tokens):
+        if _looks_like_code(t, shouting) and re.search(rf"(?<![\w]){re.escape(t.lower())}(?![\w])", text):
+            hits.append(t)
+    return hits[:limit]
+
+
+_LOOKUP_MAX_LINES = 60
+
+
+def _exact_name_lookup(question: str, repo_name: str, per_name: int = 2) -> list[dict]:
+    """For each code name in the question (get_file, HTTPAdapter), the chunks that DEFINE it, read
+    straight from the index - no model call. [] if there are none or the index can't be read.
+    Each hit: {"name", "file", "ref" ("path:start-end"), "text" (the code, as search_code shows it)}."""
+    try:
+        from ..tools.search import code_names, get_searcher
+        names = code_names(question)
+        found = [(name, r) for name in names for r in get_searcher(repo_name).search(name, n=per_name)]
+    except Exception:  # noqa: BLE001  a failure here must never break the answer itself
+        return []
+    hits, seen = [], set()
+    for name, r in found:
+        m = r["meta"]
+        symbol = m.get("name") or ""
+        defines = symbol == name or symbol.endswith("." + name) or m["file"] == name \
+            or m["file"].endswith("/" + name)
+        ref = f"{m['file']}:{m['start_line']}-{m['end_line']}"
+        if not defines or ref in seen:
+            continue
+        seen.add(ref)
+        body = [ln for ln in r["text"].splitlines() if not ln.startswith(("# File:", "# Symbol:"))]
+        label = f" {symbol}" if symbol else ""
+        # Numbered like get_file's output, so the model cites exact lines instead of guessing
+        # them inside the range (a real run cited 73-78 for code that is on lines 81-84).
+        numbered = [f"{m['start_line'] + i}: {ln}" for i, ln in enumerate(body[:_LOOKUP_MAX_LINES])]
+        text = (f"--- {m['file']} (lines {m['start_line']}-{m['end_line']}, {m['kind']}{label})\n"
+                + "\n".join(numbered))
+        hits.append({"name": name, "file": m["file"], "ref": ref, "text": text})
+    return hits
 
 
 def real_files(repo_name: str) -> set[str]:
@@ -169,6 +249,10 @@ def _fix_citation_paths(text: str, repo_name: str) -> str:
       * if SEVERAL indexed files match (a real file, but we can't tell which), make it plain text
         without a label - it isn't invented, just ambiguous.
     Done in code, not the prompt, because free models don't reliably obey "only cite real files"."""
+    # Some models (gpt-oss) cite in their own style: 【README.md:1-20】 or 【README.md†L1-L20】.
+    # Turn those into the normal `path:lines` form first, so the checks below and the UI's
+    # links treat them like every other citation.
+    text = _BRACKET_CITATION.sub(_unbracket, text)
     real = real_files(repo_name)
     if not real:
         return text
@@ -207,8 +291,9 @@ def build_team_graph(repo_name: str, llm, critic_llm=None, mode: str = "team"):
         _emit("mode", "info", mode)  # shown in the UI's log and recorded by the eval
         _emit("model", "info", active_model_name())  # which model we're STARTING this question with
         if mode == "single":
-            # Free check first (no model call). If the question uses the repo's own words, it is
-            # research no matter what the model would say, so asking the model would be wasted quota.
+            # Free check first (no model call). If the question names something from the repo's code
+            # (get_file, search.py, CX...), it is research no matter what the model would say, so
+            # asking the model would be wasted quota. Plain English words never skip the model.
             hits = repo_terms_in(state["question"], repo_name)
             if hits:
                 _emit("supervisor", "route", f"research  (the repo mentions {', '.join(hits)}; no model call needed)")
@@ -248,12 +333,24 @@ def build_team_graph(repo_name: str, llm, critic_llm=None, mode: str = "team"):
                          f"<hints>\n{tips}\n</hints>")
                 lessons_used = [h["lesson"] for h in hits]
                 _emit("memory", "recall", f"using {len(hits)} past lesson(s)")
+        lookup = _exact_name_lookup(state["question"], repo_name) if state["attempts"] == 0 else []
+        for hit in lookup:
+            _emit("researcher", "lookup", f"exact name {hit['name']} -> {hit['ref']}")
+        if lookup:
+            # Done in code, not left to the model: a question that names get_file must read the
+            # get_file definition. (A real run asked "what does get_file return?", the model called
+            # its OWN get_file tool on README.md, never searched, and described that output.)
+            task += ("\n\nEXACT-NAME LOOKUP, done for you by code. The question names code that is "
+                     "defined in this repo. Base your findings on this code first and cite it; read more "
+                     "of it with get_file if needed:\n" + "\n\n".join(h["text"] for h in lookup))
         if state["advice"]:  # second attempt: include the critic's feedback
             task += ("\n\nA reviewer checked your previous findings and gave this advice. "
                      f"Investigate it specifically:\n{state['advice']}")
         graph = build_graph(repo_name, llm, RESEARCHER_PROMPT)
         findings, evidence = "", list(state["evidence"])
         files = set(state["files"])
+        evidence += [h["text"] for h in lookup]  # the Explainer (and Critic) see the definition too
+        files.update(h["file"] for h in lookup)
         try:
             for update in graph.stream({"messages": [HumanMessage(task)]},
                                        {"recursion_limit": MAX_AGENT_STEPS * 2 + 1}, stream_mode="updates"):

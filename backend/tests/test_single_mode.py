@@ -58,13 +58,32 @@ def test_single_mode_never_calls_the_critic_and_answers_once(lesson_store):
     assert lesson_store.saved == []
 
 
-def test_single_mode_skips_the_routing_call_when_the_question_uses_repo_words(lesson_store, monkeypatch):
-    monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: FakeSearcher(["retries", "handled"]))
+def test_single_mode_skips_the_routing_call_when_the_question_names_repo_code(lesson_store, monkeypatch):
+    monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: FakeSearcher(["def", "retry_call"]))
     writer = writer_llm()
-    events, _ = run_single(writer)
+    events, _ = run_single(writer, question="How does retry_call work?")
     assert "SUPERVISOR" not in writer.roles()                   # saved one model call
     route = next(e["text"] for e in events if e["type"] == "route")
-    assert route.startswith("research") and "retries" in route
+    assert route.startswith("research") and "retry_call" in route
+
+
+def test_single_mode_asks_the_model_when_only_plain_words_match(lesson_store, monkeypatch):
+    # Plain words like "retries" or "decide" appear in most repos' comments, so they must not skip
+    # the routing call: the model decides.
+    monkeypatch.setattr("app.tools.search.get_searcher", lambda repo: FakeSearcher(["retries", "handled"]))
+    writer = writer_llm()
+    run_single(writer)
+    assert "SUPERVISOR" in writer.roles()
+
+
+def test_single_mode_refuses_off_topic_question_that_shares_common_words_with_the_repo(lesson_store, monkeypatch):
+    monkeypatch.setattr("app.tools.search.get_searcher",
+                        lambda repo: FakeSearcher(["critic", "decide", "whether", "buy", "car"]))
+    writer = FakeLLM({"SUPERVISOR": ['{"route": "chat", "reason": "not about code"}']})
+    events, _ = run_single(writer, question="should I decide whether to buy a car?")
+    assert "SUPERVISOR" in writer.roles()
+    assert FakeResearchGraph.runs == 0
+    assert final_answer(events) == team.OFF_TOPIC_REPLY        # the event the browser waits for
 
 
 def test_single_mode_still_overrules_chat_for_repo_words(lesson_store, monkeypatch):
