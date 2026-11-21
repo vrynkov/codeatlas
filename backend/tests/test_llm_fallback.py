@@ -169,3 +169,25 @@ def test_a_too_large_model_is_not_waited_for(fake_groq):
     with pytest.raises(RuntimeError, match="couldn't handle this specific request"):
         llm.get_llm().invoke([HumanMessage("explain")])
     assert log == [a, b, c]
+
+
+def test_a_per_minute_wait_just_over_30s_is_waited_not_a_crash(monkeypatch):
+    # Real eval 2026-11-20: "TPM: Limit 8000 ... Please try again in 31.3125s" crashed the question,
+    # because anything over 30s was treated as a long limit. A per-minute limit always clears in a minute.
+    from langchain_core.messages import AIMessage, HumanMessage
+    from app.agents import react_agent
+    slept = []
+    monkeypatch.setattr(react_agent.time, "sleep", lambda s: slept.append(s))
+
+    class Throttled:
+        calls = 0
+        def invoke(self, messages):
+            Throttled.calls += 1
+            if Throttled.calls == 1:
+                raise Exception("Error code: 429 - rate_limit_exceeded: Rate limit reached for model "
+                                "`openai/gpt-oss-120b` on tokens per minute (TPM): Limit 8000, Used 6349, "
+                                "Requested 5826. Please try again in 31.3125s.")
+            return AIMessage(content="ok")
+
+    assert react_agent.invoke_with_recovery(Throttled(), [HumanMessage("q")]).content == "ok"
+    assert len(slept) == 1 and 31 <= slept[0] <= 65
