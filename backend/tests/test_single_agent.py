@@ -101,3 +101,12 @@ def test_no_lessons_switch_turns_off_recall(monkeypatch):
     monkeypatch.setattr(lessons.LessonStore, "recall", lessons.LessonStore.recall)  # restored after the test
     disable_lesson_recall()
     assert lessons.LessonStore.recall(object(), "anything") == []
+
+
+def test_cost_summary_leaves_out_questions_that_crashed():
+    # A question that crashed on a rate limit used 10 calls but gave no answer; it must not be
+    # averaged in as "cost per question".
+    rows = [{"tokens": 9000, "llm_calls": 3, "seconds": 20, "llm_seconds": 5},
+            {"tokens": 23013, "llm_calls": 10, "seconds": 142, "llm_seconds": 17, "error": "RuntimeError: 429"}]
+    s = cost_summary(rows)
+    assert s["n_measured"] == 1 and s["avg_llm_calls"] == 3 and s["n_crashed_cost"] == 1

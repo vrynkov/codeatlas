@@ -50,7 +50,9 @@ TOOL_NUDGE = ("Your last tool call was invalid. Use only search_code(query, path
 NO_TOOLS_NUDGE = "Do not call any tools. Reply with plain text only."
 
 
-MAX_AUTO_WAIT = 30  # seconds. Groq's per-MINUTE limits clear fast, so a short wait is worth it.
+MAX_AUTO_WAIT = 65  # seconds. Groq's per-MINUTE limits (tokens or requests per minute) clear within a
+                    # minute, so any wait up to a minute (+ margin) is worth it. It was 30, and an eval
+                    # crashed on "Please try again in 31.3s" (TPM limit 8000) - a wait that would have worked.
                     # A per-DAY limit ("TPD") can say "try again in 24m" - waiting that long inside a
                     # loop would freeze the whole run, so we fail fast instead. NOTE: llm.get_llm()
                     # already retries a daily-limit error on a DIFFERENT model automatically, so by
