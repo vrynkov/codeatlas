@@ -311,6 +311,18 @@ The "cited the expected file" change (70% to 80%) is one question, which is with
 
 **What I'd change next.** Make fewer calls, rather than make each call smaller. The one-agent comparison ([`eval/single_agent.py`](backend/eval/single_agent.py)) tests the extreme version: no Supervisor, no Explainer and no Critic at all. A milder option is to wait for `gpt-oss-120b` to free up instead of switching models. That gives slower answers from the stronger model, which is a product trade-off.
 
+### Why the eval runs on 12 questions, not 40
+
+The question set was expanded to 40 (adding multi-file answers, exact-identifier lookups, "not in this repo" questions, and plain-English concept questions; kept on the `eval-40-questions` branch). Running the full 40 to completion is not practical on Groq's free tier, which is worth stating plainly.
+
+A single research question costs ~23K tokens across ~10 model calls (the ReAct loop plus the Explainer). The free-tier per-minute budget for `openai/gpt-oss-120b` is **8,000 tokens/minute**, so one question alone cannot finish inside a minute and must pause and resume. For numbers that are comparable across runs, every answer has to stay on the *same* model — which means pinning to `gpt-oss-120b` (`GROQ_MODEL_CHAIN=openai/gpt-oss-120b`) instead of letting the pipeline fall back to smaller ones. Pinned that way, a run stopped after a single question:
+
+> Rate limit reached for `openai/gpt-oss-120b` ... tokens per minute (TPM): Limit 8000, Used 6349, Requested 5826. Please try again in 31.3s.
+
+CodeAtlas waits out short per-minute limits, but only up to `MAX_AUTO_WAIT = 30s` ([`react_agent.py`](backend/app/agents/react_agent.py)); the required 31.3s wait was just over that, so the run ended (saving partial results). Even with a longer wait, the daily token cap would stop a full 40-question run — doubled for a single-vs-team comparison — partway through. Pinning to the smallest model instead does not help: `qwen-3.8-27b`'s output ceiling (~1,000 tokens/minute) is below the Explainer's request, so it fails the Explainer step outright.
+
+**So the reported results use the 12-question set**, which fits within free-tier budgets with patience. The 40-question set is ready for a paid tier, or for runs spread across several days (partial results combine by question id).
+
 ## Known limitations (found by actually checking the work, not guessing)
 
 - **Citation format varies.** The Explainer sometimes writes `file.py lines 123-456` instead of `file.py:123-456`; the eval's extractor was updated to catch both, but a still-rarer "file name and line number separated by unrelated prose" pattern isn't caught. See [`eval/harness.py`](backend/eval/harness.py).
