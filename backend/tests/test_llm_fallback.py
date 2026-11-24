@@ -237,3 +237,25 @@ def test_a_429_without_a_wait_from_another_host_is_waited_on_not_called_too_larg
         llm.get_llm().invoke([HumanMessage("q")])
     # The raw 429 goes up (react_agent then waits and retries), not our "too large" RuntimeError.
     assert "couldn't handle this specific request" not in str(err.value) and "429" in str(err.value)
+
+
+@pytest.mark.parametrize("error", [
+    # The same two Groq errors as Hugging Face's router returns them (real eval run, 2026-11-24):
+    "Error code: 502 - Upstream error from Groq: Tool call validation failed: tool call validation failed: "
+    "attempted to call tool 'repo_browser.open_file' which was not in request.tools",
+    "Error code: 502 - Upstream error from Groq: Parsing failed. The model generated output that could "
+    "not be parsed. Please adjust your prompt.",
+])
+def test_bad_generations_relayed_by_hugging_face_are_retried(error):
+    from app.agents import react_agent
+
+    class Flaky:
+        calls = 0
+        def invoke(self, messages):
+            Flaky.calls += 1
+            if Flaky.calls == 1:
+                raise Exception(error)
+            return AIMessage(content="ok")
+
+    assert react_agent.invoke_with_recovery(Flaky(), [HumanMessage("q")]).content == "ok"
+    assert Flaky.calls == 2
