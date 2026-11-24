@@ -5,6 +5,7 @@ rank-bm25
 langgraph
 langchain-core
 langchain-groq
+langchain-openai  # only used when LLM_BASE_URL is set (e.g. Hugging Face for eval runs)
 mcp>=2,<3
 matplotlib
 fastapi

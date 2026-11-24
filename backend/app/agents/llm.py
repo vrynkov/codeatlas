@@ -23,7 +23,7 @@ from pathlib import Path
 
 from opentelemetry import trace
 
-from ..config import BACKEND_DIR, GROQ_API_KEY, GROQ_MODEL
+from ..config import BACKEND_DIR, GROQ_API_KEY, GROQ_MODEL, LLM_API_KEY, LLM_BASE_URL
 from ..logging_setup import get_logger
 from .rate_limits import is_daily_limit, is_rate_limit, suggested_wait
 
@@ -126,6 +126,10 @@ def _make_client(model: str, temperature: float):
     Cloud Run's single default vCPU) can genuinely exceed - that surfaces as a generic,
     unhelpful "Connection error.", identically on every attempt, since retrying the same
     call under the same tight ceiling just hits the same wall again."""
+    if LLM_BASE_URL:  # another OpenAI-compatible host (see config.py), same settings and reasons
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(model=model, base_url=LLM_BASE_URL, api_key=LLM_API_KEY, temperature=temperature,
+                          max_retries=0, timeout=120)
     from langchain_groq import ChatGroq
     return ChatGroq(model=model, api_key=GROQ_API_KEY, temperature=temperature, max_retries=0, timeout=120)
 
@@ -277,7 +281,10 @@ class MultiModelChatGroq:
                         time.sleep(back_wait)
                         last_err, jump_to = e, back_idx
                         break
-                    elif wait is None:
+                    elif wait is None and (not LLM_BASE_URL or "too large" in text.lower()):
+                        # (Another host's 429 may simply not say how long to wait. Unless it says
+                        # "too large", that is an ordinary throttle: the `else` below lets
+                        # react_agent wait and retry, instead of calling it "too large" here.)
                         log.error("request_too_large", model=self.models[idx], error=text[:300])
                         # No parseable "try again in Xs" - this ISN'T a normal throttle that
                         # clears with time (e.g. Groq's "request too large for this model's

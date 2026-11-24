@@ -23,6 +23,7 @@ from collections import Counter
 from pathlib import Path
 
 from app.agents.llm import CRITIC_MODEL_CHAIN, MODEL_CHAIN
+from app.config import LLM_BASE_URL
 
 from .harness import cost_summary, run_one, score_item
 
@@ -83,6 +84,7 @@ def run(repo: str, questions: list[dict], mode: str = "team") -> list[dict]:
     print(f"Writer model order : {' -> '.join(MODEL_CHAIN)} "
           f"(falls forward automatically if one hits its limit)\n"
           f"Critic model order : {' -> '.join(CRITIC_MODEL_CHAIN)} (a different model grades the answer)\n"
+          f"Model host         : {LLM_BASE_URL or 'Groq (GROQ_API_KEY)'}\n"
           f"Mode               : {mode}" + ("  (no critic: 'passed review' is n/a)" if mode == "single" else "") + "\n",
           file=sys.stderr)
     rows = []
@@ -249,6 +251,7 @@ if __name__ == "__main__":
     rows = [done.get(q["id"]) or new[q["id"]] for q in items if q["id"] in done or q["id"] in new]
     summary = summarize(rows)
     summary["mode"] = mode
+    summary["host"] = LLM_BASE_URL or "groq"  # results from different hosts aren't strictly comparable
     if resumed:
         summary["resumed_from"] = Path(resumed).name  # rows from two days: models/quota may differ
     summary["lessons_used"] = not no_lessons and "--clear-lessons" not in sys.argv
