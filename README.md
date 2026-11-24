@@ -45,6 +45,8 @@ Plain search (Ctrl+F) finds exact words — search "login" and you miss `authent
 
 Most portfolio RAG projects are "upload a PDF, ask a question." This one is deliberately harder: it demonstrates hybrid retrieval, a real multi-agent pipeline with a self-critique loop, a self-improvement mechanism (measured honestly below: no clear effect yet), an MCP server other AI tools can plug into, and a measured evaluation — not just a demo that looks good once.
 
+**Measured, then simplified.** I built the four-agent team first, then measured it against simpler setups on 40 questions ([results](#four-setups-40-questions-2026-11-24)). One agent plus an Explainer cites the right file as often as the full team (94% each), for about 20% fewer tokens. The Critic flagged bad answers, but its retries fixed none of them. So the app now defaults to the simpler design. The team stays available as a mode, so the comparison can be rerun. The same eval shows why search matters: the same model with no search found the right file in 9% of questions, and 0% of its citations were real.
+
 ## Architecture
 
 ```mermaid
@@ -86,7 +88,7 @@ One setting, `MODE`, picks the pipeline. Set it in `backend/.env` or as a Cloud 
 | | `MODE=single` (default) | `MODE=team` |
 |---|---|---|
 | Steps | Supervisor check → Researcher → Explainer | Supervisor → Researcher → Explainer → Critic (→ one retry) |
-| Model calls per question | about 6 (estimate, not measured yet) | 8 to 11 (measured) |
+| Model calls per question (measured 2026-11-24) | 9.9 | 12.1 |
 | Checks its own answer | No | Yes: the Critic scores it 1-5; a low score is retried, then shown with a "Confidence: low" note |
 | Saves lessons after a retry | No (there is no retry) | Yes |
 
@@ -95,10 +97,8 @@ Both modes share everything else: the same search tools, the same SSE events for
 **How single mode handles off-topic questions.** It first checks, in plain code and for free, whether the question uses words from the repo's index (e.g. "CX" in an NDEx repo). If it does, the question goes straight to research with **no** routing model call. That's the same decision the team makes, because since PR #20 the team overrules a "chat" route in that case anyway. Only when no repo word matches does single mode ask the Supervisor prompt (one short call), so "what's the weather today?" still gets the polite refusal.
 
 **When to use which:**
-- **`single`: normal use and the deployed app.** The [team vs one agent comparison](#team-vs-one-agent-2026-11-13-to-11-14) found the extra agents don't help find the code; the Explainer is what produces precise citations, and single mode keeps it. Fewer calls per minute also means fewer rate-limit waits and fewer answers pushed onto smaller backup models on Groq's free tier.
+- **`single`: normal use and the deployed app.** The [four-setup comparison](#four-setups-40-questions-2026-11-24) found single mode cites the right file as often as the team (94% each) for 20% fewer tokens; the Critic flagged 3 bad answers but its retry fixed none of them. Fewer calls per minute also means fewer rate-limit waits and fewer answers pushed onto smaller backup models on Groq's free tier.
 - **`team`: comparisons and demos.** Use it to measure whether the Critic earns its cost (`python -m eval.run_eval codeatlas --mode team`), or to show the multi-agent pipeline working in the UI's log.
-
-Not measured yet: single mode itself (agent + Explainer) has not been through the eval. The comparison above measured the bare agent with no Explainer. Run `python -m eval.run_eval codeatlas --mode single --no-lessons` and then `python -m eval.compare_setups codeatlas` to get its row.
 
 ## Tech stack
 
@@ -161,7 +161,7 @@ An eval that grades itself proves little, so:
 - **Outside checks with no AI involved:** did the answer name the expected file and keyword, and does every `file:line` it cites really exist (the file is there and has those lines)?
 - **A repo the models can't have memorized.** `psf/requests` is in every model's training data, so a good score there partly measures memory. CodeAtlas's own code (written in 2026, after these models were trained) is the second test set: [`eval/questions_codeatlas.json`](backend/eval/questions_codeatlas.json).
 - **A no-search baseline.** [`eval/baseline.py`](backend/eval/baseline.py) asks the same questions to the same model with no search at all, and prints both side by side. The gap between the two is what the agents and search actually add.
-- **A one-agent baseline.** [`eval/single_agent.py`](backend/eval/single_agent.py) asks the same questions to ONE ReAct agent with the same tools and model, but no Supervisor, Explainer, Critic or retry. Every setup also records tokens, model calls and seconds per question, so "is the team worth its extra cost?" has a number. [`eval/compare_setups.py`](backend/eval/compare_setups.py) prints all three side by side, only on questions every setup finished, plus a question-by-question tally. Results are in [Team vs one agent](#team-vs-one-agent-2026-11-13-to-11-14) below.
+- **A one-agent baseline.** [`eval/single_agent.py`](backend/eval/single_agent.py) asks the same questions to ONE ReAct agent with the same tools and model, but no Supervisor, Explainer, Critic or retry. Every setup also records tokens, model calls and seconds per question, so "is the team worth its extra cost?" has a number. [`eval/compare_setups.py`](backend/eval/compare_setups.py) prints all four side by side, only on questions every setup finished, plus a question-by-question tally. Latest results are in [Four setups, 40 questions](#four-setups-40-questions-2026-11-24) below.
 
 ```bash
 python -m app.indexing.indexer index https://github.com/vrynkov/codeatlas
@@ -169,7 +169,7 @@ python -m eval.run_eval codeatlas --no-lessons   # the full team (no hints from 
 python -m eval.run_eval codeatlas --mode single --no-lessons   # the app's default: agent + Explainer
 python -m eval.single_agent codeatlas            # one ReAct agent, no team
 python -m eval.baseline codeatlas                # the same model, no search
-python -m eval.compare_setups codeatlas          # one table for all three
+python -m eval.compare_setups codeatlas          # one table for all four
 # optional, needs `indexer index https://github.com/psf/requests` first:
 python -m eval.baseline requests      # a famous repo: shows how much of a score is memory
 ```
@@ -262,7 +262,33 @@ Three of four runs show a net positive lean; one shows a net negative one. Chart
 
 **Honest read:** the mechanism shows a real, if modest, positive lean across repeated testing — but every run shares the same confound (the AFTER pass usually completes fewer questions than BEFORE, since it starts right after BEFORE has already spent part of the day's quota, and the model actually answering sometimes changes mid-comparison as Groq's per-model limits shift). A single same-model, full-sample run under calm conditions is what would actually settle this with confidence. See "Known limitations" below for the specifics behind Run 2's regression.
 
-### Team vs one agent (2026-11-13 to 11-14)
+### Four setups, 40 questions (2026-11-24)
+
+The same 40 questions (38 about the code, 2 small-talk routing checks) through four setups, each run once on the same day, the same code and a freshly built index ([no search](backend/eval/results/codeatlas-baseline-20261124-151009.json), [one agent](backend/eval/results/codeatlas-single-20261124-150523.json), [single mode](backend/eval/results/codeatlas-mode-single-20261124-144446.json), [team](backend/eval/results/codeatlas-20261124-145824.json)).
+
+Every answer was written by `gpt-oss-120b` with no fallback to smaller models, and the team's Critic was `gpt-oss-20b`. The earlier runs on this page had a confound: answers got pushed onto smaller models mid-run. To remove it, these runs used paid credits through Hugging Face's router (`openai/gpt-oss-120b:groq`, so the requests still ran on Groq's hardware). They cost roughly 15 cents per 40-question run. Set `LLM_BASE_URL` / `LLM_API_KEY` (see [`.env.example`](backend/.env.example)) to do the same. No run had any errors.
+
+| Setup | Cited right file (`file:line`) | Named right file (anywhere) | Real citations | Cited lines hold the named code | Tokens / question | Model calls / question | Seconds / question (model working) |
+|---|---|---|---|---|---|---|---|
+| Same model, no search | 9% | 21% | 0% (of 37) | n/a | 552 | 1.0 | 1 (1) |
+| One ReAct agent | 76% | 85% | 100% (91) | 94% (of 51) | 16,254 | 7.7 | 8 (7) |
+| **Single mode** (agent + Explainer, the default) | **94%** | **94%** | 100% (283) | 92% (of 158) | 22,907 | 9.9 | 11 (10) |
+| Full team (+ Supervisor + Critic) | 94% | 94% | 100% (310) | 97% (of 162) | 28,717 | 12.1 | 13 (12) |
+
+The file columns are out of the 33 questions that have an expected file. The 5 "not in this repo" questions (auth, payments, GraphQL, Redis, WebSocket) have none, so I read those answers by hand.
+
+**What it shows:**
+- **Search is what makes answers real.** With no search, none of the 37 citations pointed at real code, and the right file came up in 7 of 33 answers.
+- **The Explainer earns its cost.** Going from the one agent to single mode raised "cited the right file" from 25 to 31 of 33 questions, for 41% more tokens. The one agent often named the file without line numbers, or not at all.
+- **The Critic doesn't.** Single mode and the team cite the right file equally often (31 of 33 each), and the team costs 25% more tokens and 22% more calls. Question by question, the team beat single mode on 1 question (`stop_button`) and lost 1 (`why_step_limit`). The Critic sent 3 answers back for a retry, and all 3 were still wrong after it. Two were made up: an `src/auth.py` that doesn't exist, and a `git pull` the indexer never runs. The Critic *detects* bad answers, but the retry doesn't *fix* them. The team's one real edge is "cited lines hold the named code", 97% vs 92%, which is about 8 citations.
+- **"Not in this repo" questions:** the one agent answered all 5 honestly. Single mode and the team each made up an answer for the auth question (4 of 5). Some test files in this repo contain fake paths like `backend/app/auth/login.py` on purpose, to test the citation checker, and the Explainer took them at face value.
+- **Wrong in every setup:** "Where are the limits configured?" All three setups with search named `indexer.py` and `team.py`, which *use* `MAX_REPO_MB` and `MAX_ATTEMPTS`. The constants are *defined* in `config.py`. The agent doesn't follow an import to its source.
+
+**Verdict.** Single mode is the right default: it finds and cites the code as well as the team, for about 20% fewer tokens and fewer calls. The Critic's score is a useful *warning* signal. As a retry trigger it fixed nothing in this run.
+
+**Read before quoting.** Each setup ran once. One question is 3 points, and identical runs have moved by more than that before. I wrote both the questions and the code, which is a bias. "Mentioned the keyword" is left out of the table because it's a weak signal (79% even with no search). The first attempts at these runs hit the model's bad tool calls, relayed by the router as a 502 error. Those are now retried (PR #30), and these runs are the clean reruns after that fix, not rerolls of failed questions.
+
+### Team vs one agent (2026-11-13 to 11-14, older and smaller)
 
 Is the four-agent team worth it, or would one agent do the job? Same 10 code questions, same tools, same models, each setup on fresh daily quota ([team](backend/eval/results/codeatlas-20261113-094221.json), [one agent](backend/eval/results/codeatlas-single-20261114-130721.json), [no search](backend/eval/results/codeatlas-baseline-20261114-131151.json)).
 
@@ -459,6 +485,9 @@ Note: lessons (the self-improvement memory) live in the same `data/` folder, so 
 when Cloud Run scales to zero (see the known limitation above).
 
 ## What I'd build next
+
+- **Fix the two weak spots the 40-question eval found:** follow an import to the file that defines a name ("where is `MAX_REPO_MB` set?" should answer `config.py`, not the file that uses it), and stop deliberately fake paths in test files from being read as real code. Check both fixes on new questions that aren't in the eval set, so the fix isn't just tuned to the test.
+- **Make the comparison sturdier:** run each setup 3 times to show how much the scores move between runs, and add questions written by someone other than me.
 
 - Multimodal support: index architecture diagrams and screenshots in a repo's docs (CLIP embeddings), not just text
 - Persistent storage so an indexed repo survives a Cloud Run redeploy or scale-down to zero
