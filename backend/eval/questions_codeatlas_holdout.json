@@ -1,0 +1,131 @@
+[
+  {
+    "id": "ho_step_limit",
+    "type": "where_defined",
+    "question": "Where is the maximum number of agent steps set?",
+    "expected_route": "research",
+    "expected_files": [
+      "config.py"
+    ],
+    "expected_keywords": [
+      "MAX_AGENT_STEPS"
+    ]
+  },
+  {
+    "id": "ho_repos_dir",
+    "type": "where_defined",
+    "question": "Where is the folder that stores cloned repositories defined?",
+    "expected_route": "research",
+    "expected_files": [
+      "config.py"
+    ],
+    "expected_keywords": [
+      "REPOS_DIR"
+    ]
+  },
+  {
+    "id": "ho_tool_output",
+    "type": "where_defined",
+    "question": "Where is the size limit for tool output configured?",
+    "expected_route": "research",
+    "expected_files": [
+      "config.py"
+    ],
+    "expected_keywords": [
+      "MAX_TOOL_OUTPUT_CHARS"
+    ]
+  },
+  {
+    "id": "ho_pass_score",
+    "type": "where_defined",
+    "question": "Where is the score an answer needs to be accepted by the critic set?",
+    "expected_route": "research",
+    "expected_files": [
+      "config.py"
+    ],
+    "expected_keywords": [
+      "PASS_SCORE"
+    ]
+  },
+  {
+    "id": "ho_clone_timeout",
+    "type": "where_defined",
+    "question": "Where is the time limit for cloning a repository configured?",
+    "expected_route": "research",
+    "expected_files": [
+      "config.py"
+    ],
+    "expected_keywords": [
+      "CLONE_TIMEOUT_S"
+    ]
+  },
+  {
+    "id": "ho_rate_limit_check",
+    "type": "where_defined",
+    "question": "Where is the code that decides whether an error message means a rate limit defined?",
+    "expected_route": "research",
+    "expected_files": [
+      "rate_limits.py"
+    ],
+    "expected_keywords": [
+      "is_rate_limit"
+    ]
+  },
+  {
+    "id": "ho_evidence_size",
+    "type": "where_defined",
+    "question": "Where is the amount of code the Explainer is allowed to see configured?",
+    "expected_route": "research",
+    "expected_files": [
+      "config.py"
+    ],
+    "expected_keywords": [
+      "MAX_EVIDENCE_CHARS"
+    ]
+  },
+  {
+    "id": "ho_nir_passwords",
+    "type": "not_in_repo",
+    "question": "How are user passwords hashed and stored?",
+    "expected_route": "research",
+    "expected_files": [],
+    "expected_keywords": [],
+    "expected_not_found": true
+  },
+  {
+    "id": "ho_nir_sessions",
+    "type": "not_in_repo",
+    "question": "How does the app manage user sessions and cookies?",
+    "expected_route": "research",
+    "expected_files": [],
+    "expected_keywords": [],
+    "expected_not_found": true
+  },
+  {
+    "id": "ho_nir_email",
+    "type": "not_in_repo",
+    "question": "Where does the app send emails to users?",
+    "expected_route": "research",
+    "expected_files": [],
+    "expected_keywords": [],
+    "expected_not_found": true
+  },
+  {
+    "id": "ho_nir_migrations",
+    "type": "not_in_repo",
+    "question": "Which database migrations does the project run?",
+    "expected_route": "research",
+    "expected_files": [],
+    "expected_keywords": [],
+    "expected_not_found": true
+  },
+  {
+    "id": "ho_nir_kubernetes",
+    "type": "not_in_repo",
+    "question": "Where is the Kubernetes deployment configured?",
+    "expected_route": "research",
+    "expected_files": [],
+    "expected_keywords": [],
+    "expected_not_found": true
+  }
+]
