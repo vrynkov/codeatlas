@@ -44,6 +44,10 @@ do NOT use a path from prose or the README if it differs from the path in the ev
 cite just a function or class name alone (e.g. `chunk_repo (lines 88-98)` is WRONG - it names
 no file at all) - always the real path, even when naming the function too feels natural: say
 "In `chunk_repo` (`backend/app/indexing/chunker.py:88-98`), ..." instead.
+If the question asks where something is defined, set or configured, cite the file that DEFINES it
+(the EVIDENCE says "Imported here, defined in another file: NAME -> path"), not only a file that uses it.
+Evidence marked "(test file ...)" is test code: a path that appears only inside a test's strings is a
+made-up example, never a real file of this repo - if that is all you have, say the repo has no such code.
 Use ONLY facts found in FINDINGS or EVIDENCE. If evidence is thin, say so. Stay under about 250 words."""
 
 CRITIC_PROMPT = """[ROLE:CRITIC]
