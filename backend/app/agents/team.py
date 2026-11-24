@@ -31,7 +31,7 @@ from langgraph.errors import GraphRecursionError
 from langgraph.graph import END, START, StateGraph
 
 from ..config import (GROQ_API_KEY, MAX_AGENT_STEPS, MAX_ATTEMPTS, MAX_EVIDENCE_CHARS, MODE, MODES,
-                      PASS_SCORE)
+                      PASS_SCORE, REPOS_DIR)
 from ..memory.lessons import LessonStore, lesson_from_retry, record_feedback, safe_files
 from .llm import active_model_name
 from .prompts import CRITIC_PROMPT, EXPLAINER_PROMPT, RESEARCHER_PROMPT, SUPERVISOR_PROMPT
@@ -107,6 +107,30 @@ _CITATION = re.compile(
 # A bare file path (no line numbers) wrapped in backticks, e.g. `app/tools/search.py`. The UI links
 # these to the file too, so an invented one has to be unwrapped to plain, non-clickable text.
 _BACKTICK_PATH = re.compile(r"`(?P<path>[\w .\-/]+\.\w{1,4})`")
+
+# The patterns above match any `word.word`, so code like `request.client.host`, `sys.path` or
+# `LessonStore.add` looks like a file named "client.host". Those are code, not citations: only a
+# match ending in a real file extension is checked. (A real 2026-11-24 eval run labelled about half
+# of its "invented paths" wrongly before this check: request.client.host, sys.path, self.docs...)
+_FILE_EXTS = frozenset("""
+py pyi js jsx ts tsx mjs cjs java kt go rs c h cc cpp hpp cs rb php swift scala vue
+md rst txt json yml yaml toml cfg ini env lock html css scss sh bat ps1 sql xml csv ipynb
+""".split())
+
+
+def _is_file_path(path: str) -> bool:
+    return path.rsplit(".", 1)[-1].lower() in _FILE_EXTS
+
+
+def _on_disk(repo_name: str, path: str) -> bool:
+    """True if the path is a real file in the repo's clone. Catches files the index skips, such as an
+    empty __init__.py (it has no chunks, so real_files() never lists it)."""
+    try:
+        root = (REPOS_DIR / repo_name).resolve()
+        target = (root / path).resolve()
+        return root in target.parents and target.is_file()
+    except (OSError, ValueError):
+        return False
 
 
 # A citation in the 【...】 brackets some models use: 【path:1-20】, 【path†L1-L20】 or 【path】.
@@ -286,7 +310,7 @@ def _fix_citation_paths(text: str, repo_name: str) -> str:
 
     def resolve(cited: str) -> tuple[str | None, int]:
         """(the real indexed path or None, how many indexed files matched)."""
-        if cited in real:
+        if cited in real or _on_disk(repo_name, cited):
             return cited, 1
         matches = [p for p in real if p.endswith("/" + cited)]
         return (matches[0] if len(matches) == 1 else None), len(matches)
@@ -295,12 +319,16 @@ def _fix_citation_paths(text: str, repo_name: str) -> str:
         return path + (NOT_FOUND_LABEL if n_matches == 0 else "")
 
     def fix_with_lines(m: "re.Match") -> str:
+        if not _is_file_path(m.group("path")):  # code such as `self.docs:3`, not a file: leave as is
+            return m.group(0)
         real_path, n = resolve(m.group("path"))
         if real_path:  # real file: keep it a link, with whatever backticks it had
             return f"{m.group('lb')}{real_path}:{m.group('lines')}{m.group('rb')}"
         return unlinked(m.group("path"), n)  # plain text, no backticks, no :line -> no link
 
     def fix_bare(m: "re.Match") -> str:
+        if not _is_file_path(m.group("path")):  # `request.client.host` is code, not a file
+            return m.group(0)
         real_path, n = resolve(m.group("path"))
         return f"`{real_path}`" if real_path else unlinked(m.group("path"), n)
 

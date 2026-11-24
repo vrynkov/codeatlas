@@ -63,3 +63,37 @@ def test_bracket_citations_are_converted_and_checked(raw, expected):
 def test_invented_file_in_brackets_is_still_caught():
     out = fix("It is here【backend/app/auth/login.py:4】.")
     assert "【" not in out and "backend/app/auth/login.py" + team.NOT_FOUND_LABEL in out
+
+
+# Real strings from the 2026-11-24 eval answers: code names in backticks, not files. Before the
+# file-extension check, every one of these was labelled "(not found in this repo)".
+@pytest.mark.parametrize("code", ["request.client.host", "sys.path", "LessonStore.add", "self.docs",
+                                  "github.com", "redis.set", "mcp.run", "cost_summary.avg"])
+def test_code_names_are_not_treated_as_invented_files(code):
+    text = f"It reads `{code}` first."
+    assert fix(text) == text
+
+
+def test_code_name_with_a_line_number_is_left_alone():
+    assert fix("See `self.docs:3`.") == "See `self.docs:3`."
+
+
+def test_invented_file_is_still_caught_after_the_extension_check():
+    assert fix("Login is in `src/auth.py`.") == "Login is in src/auth.py (not found in this repo)."
+    assert fix("Saved in `model_fallback_state.json`.") == \
+        "Saved in model_fallback_state.json (not found in this repo)."
+
+
+def test_empty_file_in_the_clone_counts_as_real(tmp_path, monkeypatch):
+    # An empty __init__.py has no chunks, so the index (real_files) never lists it.
+    (tmp_path / "demo" / "backend" / "app").mkdir(parents=True)
+    (tmp_path / "demo" / "backend" / "app" / "__init__.py").write_text("")
+    monkeypatch.setattr(team, "REPOS_DIR", tmp_path)
+    assert fix("See `backend/app/__init__.py`.") == "See `backend/app/__init__.py`."
+
+
+def test_on_disk_check_cannot_escape_the_clone(tmp_path, monkeypatch):
+    (tmp_path / "demo").mkdir()
+    (tmp_path / "secret.py").write_text("x = 1")
+    monkeypatch.setattr(team, "REPOS_DIR", tmp_path)
+    assert team._on_disk("demo", "../secret.py") is False
