@@ -193,3 +193,21 @@ def test_a_per_minute_wait_just_over_30s_is_waited_not_a_crash(monkeypatch):
 
     assert react_agent.invoke_with_recovery(Throttled(), [HumanMessage("q")]).content == "ok"
     assert len(slept) == 1 and 31 <= slept[0] <= 65
+
+
+def test_groq_output_parse_failure_is_retried_not_fatal():
+    # Real eval 2026-11-23: a 400 "output_parse_failed" (Groq couldn't parse the model's tool call)
+    # killed the Researcher. It's a bad generation, so the same request usually works next time.
+    from app.agents import react_agent
+
+    class Garbled:
+        calls = 0
+        def invoke(self, messages):
+            Garbled.calls += 1
+            if Garbled.calls == 1:
+                raise Exception("Error code: 400 - {'error': {'message': 'Parsing failed. The model generated "
+                                "output that could not be parsed.', 'code': 'output_parse_failed'}}")
+            return AIMessage(content="ok")
+
+    assert react_agent.invoke_with_recovery(Garbled(), [HumanMessage("q")]).content == "ok"
+    assert Garbled.calls == 2

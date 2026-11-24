@@ -6,6 +6,8 @@ Run from backend/ (with the venv active):
     python -m eval.run_eval requests --clear-lessons   # test WITHOUT self-improvement, as a baseline
     python -m eval.run_eval codeatlas --no-lessons     # ignore saved lessons (without deleting them)
     python -m eval.run_eval codeatlas --mode single    # run single mode instead (default: --mode team)
+    python -m eval.run_eval codeatlas --mode single --no-lessons --resume eval/results/<file>.json
+                                                       # finish a run the daily quota cut short
 
 --mode picks the pipeline: team (default here, so old result files stay comparable) or single.
 Team results are saved as <repo>-<time>.json, single-mode results as <repo>-mode-single-<time>.json.
@@ -55,6 +57,21 @@ def parse_mode(argv: list[str]) -> str:
     if mode not in ("single", "team"):
         sys.exit(f"--mode must be 'single' or 'team', got {mode!r}")
     return mode
+
+
+def resume_from(path: str, items: list[dict], mode: str, no_lessons: bool) -> tuple[dict, list[dict]]:
+    """Rows of an earlier run that finished WITHOUT an error (kept as they are), and the questions
+    still to run. A question that crashed, was cut by the quota, or had a Researcher error is run
+    again, so a rate limit never ends up counted as a wrong answer. The earlier run must have used
+    the same mode and the same lessons setting, or the two halves wouldn't measure the same thing."""
+    data = json.loads(Path(path).read_text(encoding="utf-8"))
+    old = data.get("summary", {})
+    if old.get("mode", "team") != mode:
+        sys.exit(f"--resume: {path} is a {old.get('mode', 'team')} run, this is --mode {mode}.")
+    if old.get("lessons_used") is not (not no_lessons):
+        sys.exit(f"--resume: {path} and this run differ in --no-lessons; use the same setting.")
+    done = {r["id"]: r for r in data["rows"] if not r.get("error")}
+    return done, [q for q in items if q["id"] not in done]
 
 
 def results_name(repo: str, mode: str, stamp: str) -> str:
@@ -220,9 +237,20 @@ if __name__ == "__main__":
 
     mode = parse_mode(sys.argv)
     items = questions_for(repo)
-    rows = run(repo, items, mode)
+    done, resumed = {}, None
+    if "--resume" in sys.argv and sys.argv.index("--resume") + 1 < len(sys.argv):
+        resumed = sys.argv[sys.argv.index("--resume") + 1]
+        done, todo = resume_from(resumed, items, mode, no_lessons)
+        print(f"Resuming {Path(resumed).name}: keeping {len(done)} finished question(s), "
+              f"running {len(todo)}.", file=sys.stderr)
+    else:
+        todo = items
+    new = {r["id"]: r for r in run(repo, todo, mode)}
+    rows = [done.get(q["id"]) or new[q["id"]] for q in items if q["id"] in done or q["id"] in new]
     summary = summarize(rows)
     summary["mode"] = mode
+    if resumed:
+        summary["resumed_from"] = Path(resumed).name  # rows from two days: models/quota may differ
     summary["lessons_used"] = not no_lessons and "--clear-lessons" not in sys.argv
     print_summary(f"CodeAtlas eval - {repo} ({mode} mode)", summary)
 

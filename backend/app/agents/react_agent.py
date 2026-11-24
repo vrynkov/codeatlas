@@ -72,7 +72,10 @@ def invoke_with_recovery(llm_with_tools, messages, tries: int = 3, nudge: str = 
         except Exception as e:  # noqa: BLE001
             text = str(e)
             last = attempt == tries - 1
-            if "tool_use_failed" in text and not last:
+            # tool_use_failed: the model called a tool that doesn't exist. output_parse_failed: Groq
+            # couldn't parse what the model wrote (a real eval run, 2026-11-23, lost a question to it).
+            # Both are a bad generation, not a bad request: the same request usually works next time.
+            if ("tool_use_failed" in text or "output_parse_failed" in text) and not last:
                 log.warning("invalid_tool_call_retry", attempt=attempt + 1)
                 extra = [HumanMessage(nudge)]
                 continue
