@@ -45,6 +45,8 @@ Plain search (Ctrl+F) finds exact words — search "login" and you miss `authent
 
 Most portfolio RAG projects are "upload a PDF, ask a question." This one is deliberately harder: it demonstrates hybrid retrieval, a real multi-agent pipeline with a self-critique loop, a self-improvement mechanism (measured honestly below: no clear effect yet), an MCP server other AI tools can plug into, and a measured evaluation — not just a demo that looks good once.
 
+**Measured, then simplified.** I built the four-agent team first, then measured it against simpler setups on 40 questions ([results](#four-setups-40-questions-2026-11-24)). One agent plus an Explainer cites the right file as often as the full team (94% each), for about 20% fewer tokens. The Critic flagged bad answers, but its retries fixed none of them. So the app now defaults to the simpler design. The team stays available as a mode, so the comparison can be rerun. The same eval shows why search matters: the same model with no search found the right file in 9% of questions, and 0% of its citations were real.
+
 ## Architecture
 
 ```mermaid
@@ -483,6 +485,9 @@ Note: lessons (the self-improvement memory) live in the same `data/` folder, so 
 when Cloud Run scales to zero (see the known limitation above).
 
 ## What I'd build next
+
+- **Fix the two weak spots the 40-question eval found:** follow an import to the file that defines a name ("where is `MAX_REPO_MB` set?" should answer `config.py`, not the file that uses it), and stop deliberately fake paths in test files from being read as real code. Check both fixes on new questions that aren't in the eval set, so the fix isn't just tuned to the test.
+- **Make the comparison sturdier:** run each setup 3 times to show how much the scores move between runs, and add questions written by someone other than me.
 
 - Multimodal support: index architecture diagrams and screenshots in a repo's docs (CLIP embeddings), not just text
 - Persistent storage so an indexed repo survives a Cloud Run redeploy or scale-down to zero
