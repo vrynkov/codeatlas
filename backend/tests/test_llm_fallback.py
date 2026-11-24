@@ -193,3 +193,47 @@ def test_a_per_minute_wait_just_over_30s_is_waited_not_a_crash(monkeypatch):
 
     assert react_agent.invoke_with_recovery(Throttled(), [HumanMessage("q")]).content == "ok"
     assert len(slept) == 1 and 31 <= slept[0] <= 65
+
+
+def test_groq_output_parse_failure_is_retried_not_fatal():
+    # Real eval 2026-11-23: a 400 "output_parse_failed" (Groq couldn't parse the model's tool call)
+    # killed the Researcher. It's a bad generation, so the same request usually works next time.
+    from app.agents import react_agent
+
+    class Garbled:
+        calls = 0
+        def invoke(self, messages):
+            Garbled.calls += 1
+            if Garbled.calls == 1:
+                raise Exception("Error code: 400 - {'error': {'message': 'Parsing failed. The model generated "
+                                "output that could not be parsed.', 'code': 'output_parse_failed'}}")
+            return AIMessage(content="ok")
+
+    assert react_agent.invoke_with_recovery(Garbled(), [HumanMessage("q")]).content == "ok"
+    assert Garbled.calls == 2
+
+
+def test_default_client_is_groq(monkeypatch):
+    monkeypatch.setattr(llm, "LLM_BASE_URL", "")
+    assert type(llm._make_client("openai/gpt-oss-120b", 0)).__name__ == "ChatGroq"
+
+
+def test_another_openai_compatible_host_can_be_used_for_evals(monkeypatch):
+    # e.g. Hugging Face's router, when the free Groq quota is too small for a full eval run
+    monkeypatch.setattr(llm, "LLM_BASE_URL", "https://router.huggingface.co/v1")
+    monkeypatch.setattr(llm, "LLM_API_KEY", "hf_test")
+    client = llm._make_client("openai/gpt-oss-120b:groq", 0)
+    assert type(client).__name__ == "ChatOpenAI"
+    assert client.model_name == "openai/gpt-oss-120b:groq" and "router.huggingface.co" in str(client.openai_api_base)
+    assert client.max_retries == 0  # our own retry/fallback logic must see every 429
+
+
+def test_a_429_without_a_wait_from_another_host_is_waited_on_not_called_too_large(fake_groq, monkeypatch):
+    failures, log = fake_groq
+    monkeypatch.setattr(llm, "LLM_BASE_URL", "https://router.huggingface.co/v1")
+    monkeypatch.setattr(llm, "MODEL_CHAIN", ["openai/gpt-oss-120b:groq"])
+    failures["openai/gpt-oss-120b:groq"] = "Error code: 429 - {'error': 'rate limit reached'}"
+    with pytest.raises(Exception) as err:
+        llm.get_llm().invoke([HumanMessage("q")])
+    # The raw 429 goes up (react_agent then waits and retries), not our "too large" RuntimeError.
+    assert "couldn't handle this specific request" not in str(err.value) and "429" in str(err.value)

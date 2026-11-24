@@ -16,6 +16,16 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY", "").strip()
 # If Groq retires this model, pick another tool-capable one from https://console.groq.com/docs/models
 GROQ_MODEL = os.getenv("GROQ_MODEL", "openai/gpt-oss-120b")
 
+# --- Optional: send the model calls to another OpenAI-compatible host instead of Groq ---
+# Used for eval runs when the free Groq quota is too small, e.g. Hugging Face's router, which can
+# still serve the request from Groq's hardware ("openai/gpt-oss-120b:groq") but bills your HF account:
+#   set LLM_BASE_URL=https://router.huggingface.co/v1
+#   set LLM_API_KEY=<HF token with "Make calls to Inference Providers">
+#   set GROQ_MODEL_CHAIN=openai/gpt-oss-120b:groq
+# Empty (the default) = Groq with GROQ_API_KEY, exactly as before.
+LLM_BASE_URL = os.getenv("LLM_BASE_URL", "").strip()
+LLM_API_KEY = os.getenv("LLM_API_KEY", "").strip()
+
 DATA_DIR = BACKEND_DIR / "data"
 REPOS_DIR = DATA_DIR / "repos"
 DB_DIR = DATA_DIR / "chroma"

@@ -89,3 +89,23 @@ def test_symbol_check_catches_right_file_but_wrong_lines(tmp_path):
     assert c["valid_citations"] == 5                                   # every one EXISTS...
     assert c["symbol_checked"] == 4 and c["symbol_matched"] == 3       # ...but one points at the wrong lines
     assert c["symbol_mismatches"] == ["a.py:1-2 (named retry)"]
+
+
+def test_resume_keeps_clean_rows_and_reruns_crashed_or_missing_ones(tmp_path):
+    import json as _json
+
+    import pytest as _pytest
+
+    from eval.run_eval import resume_from
+    items = [{"id": i} for i in ("a", "b", "c", "d")]
+    old = tmp_path / "old.json"
+    old.write_text(_json.dumps({"summary": {"mode": "single", "lessons_used": False},
+                                "rows": [{"id": "a", "error": ""},
+                                         {"id": "b", "error": "Researcher error: RateLimitError ..."},
+                                         {"id": "c", "error": "RuntimeError: ... exhausted for today"}]}))
+    done, todo = resume_from(str(old), items, "single", no_lessons=True)
+    assert list(done) == ["a"] and [q["id"] for q in todo] == ["b", "c", "d"]  # d never ran
+    with _pytest.raises(SystemExit):
+        resume_from(str(old), items, "team", no_lessons=True)    # different mode: not comparable
+    with _pytest.raises(SystemExit):
+        resume_from(str(old), items, "single", no_lessons=False)  # different lessons setting
