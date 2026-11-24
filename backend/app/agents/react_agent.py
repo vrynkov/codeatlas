@@ -59,6 +59,18 @@ MAX_AUTO_WAIT = 65  # seconds. Groq's per-MINUTE limits (tokens or requests per 
                     # the time we see one here, every configured model has already been exhausted.
 
 
+# Groq's codes for "the model wrote something invalid", and the same errors as Hugging Face's router
+# passes them on (a 502 "Upstream error from Groq: ..." that drops the code). gpt-oss often calls
+# tools from its training ("repo_browser.open_file", "search") that we never gave it.
+_BAD_GENERATION = ("tool_use_failed", "output_parse_failed",
+                   "tool call validation failed", "model generated output that could not be parsed")
+
+
+def is_bad_generation(text: str) -> bool:
+    t = text.lower()
+    return any(marker in t for marker in _BAD_GENERATION)
+
+
 def invoke_with_recovery(llm_with_tools, messages, tries: int = 3, nudge: str = TOOL_NUDGE):
     """Free-tier models sometimes fail in predictable ways. Instead of crashing, we recover:
     - the model invents a tool that doesn't exist -> tell it so and let it try again
@@ -75,7 +87,7 @@ def invoke_with_recovery(llm_with_tools, messages, tries: int = 3, nudge: str = 
             # tool_use_failed: the model called a tool that doesn't exist. output_parse_failed: Groq
             # couldn't parse what the model wrote (a real eval run, 2026-11-23, lost a question to it).
             # Both are a bad generation, not a bad request: the same request usually works next time.
-            if ("tool_use_failed" in text or "output_parse_failed" in text) and not last:
+            if is_bad_generation(text) and not last:
                 log.warning("invalid_tool_call_retry", attempt=attempt + 1)
                 extra = [HumanMessage(nudge)]
                 continue
