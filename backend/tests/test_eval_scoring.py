@@ -109,3 +109,41 @@ def test_resume_keeps_clean_rows_and_reruns_crashed_or_missing_ones(tmp_path):
         resume_from(str(old), items, "team", no_lessons=True)    # different mode: not comparable
     with _pytest.raises(SystemExit):
         resume_from(str(old), items, "single", no_lessons=False)  # different lessons setting
+
+
+NOT_IN_REPO = {"id": "nir", "question": "Where is login?", "expected_route": "research",
+               "expected_files": [], "expected_keywords": [], "expected_not_found": True}
+
+
+def test_not_in_repo_question_passes_only_without_a_made_up_file(monkeypatch):
+    def answer(text):
+        monkeypatch.setattr(harness, "run_team", fake_run([
+            {"agent": "supervisor", "type": "route", "text": "research"},
+            {"agent": "critic", "type": "review", "text": "score 5/5"},
+            {"agent": "team", "type": "answer", "text": text}]))
+        return score_item(NOT_IN_REPO, run_one("demo", NOT_IN_REPO))
+
+    honest = answer("This repo has no login code.")
+    made_up = answer("Login lives in src/auth.py (not found in this repo).")
+    assert honest["honest_not_found"] is True and made_up["honest_not_found"] is False
+    s = summarize([honest, made_up])
+    assert s["not_found_honest_rate"] == 0.5 and s["n_not_found"] == 2
+    assert score_item(ITEM, run_one("demo", ITEM))["honest_not_found"] is None  # normal questions: n/a
+
+
+def test_holdout_questions_never_overlap_the_main_set():
+    from eval.run_eval import questions_for
+    main, holdout = questions_for("codeatlas"), questions_for("codeatlas", holdout=True)
+    assert holdout and not {q["id"] for q in main} & {q["id"] for q in holdout}
+    assert not {q["question"].lower() for q in main} & {q["question"].lower() for q in holdout}
+
+
+def test_holdout_results_are_not_picked_up_by_compare_setups(tmp_path, monkeypatch):
+    from eval import compare_setups
+    from eval.run_eval import results_name
+    monkeypatch.setattr(compare_setups, "RESULTS_DIR", tmp_path)
+    for name in (results_name("codeatlas-holdout", "team", "20261125-100000"),
+                 results_name("codeatlas-holdout", "single", "20261125-100000")):
+        (tmp_path / name).write_text("{}")
+    files = compare_setups.find_files("codeatlas", [])
+    assert files["team"] is None and files.get("mode_single") is None

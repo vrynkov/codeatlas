@@ -13,6 +13,8 @@ Run from backend/ (with the venv active):
 Team results are saved as <repo>-<time>.json, single-mode results as <repo>-mode-single-<time>.json.
 
 Questions come from eval/questions_<repo>.json if that file exists, else eval/questions.json.
+--holdout uses eval/questions_<repo>_holdout.json instead: questions that CHECK a fix and are never
+used to tune one (results saved as <repo>-holdout-..., so compare_setups never mixes them in).
 Compare against "the same model with NO search at all" with:  python -m eval.baseline <repo>
 Compare against ONE ReAct agent (no team) with:                python -m eval.single_agent <repo>
 """
@@ -30,9 +32,12 @@ from .harness import cost_summary, run_one, score_item
 QUESTIONS = Path(__file__).parent / "questions.json"
 
 
-def questions_for(repo: str) -> list[dict]:
+def questions_for(repo: str, holdout: bool = False) -> list[dict]:
     """Each repo can have its own question set: eval/questions_<repo>.json (falls back to the
-    original requests set in questions.json)."""
+    original requests set in questions.json). holdout=True loads eval/questions_<repo>_holdout.json:
+    questions written to CHECK a fix, never used to tune one, so a fix can't just learn the test."""
+    if holdout:
+        return json.loads((Path(__file__).parent / f"questions_{repo}_holdout.json").read_text(encoding="utf-8"))
     own = Path(__file__).parent / f"questions_{repo}.json"
     return json.loads((own if own.exists() else QUESTIONS).read_text(encoding="utf-8"))
 RESULTS_DIR = Path(__file__).parent / "results"
@@ -154,6 +159,8 @@ def summarize(rows: list[dict]) -> dict:
                               / sum(r.get("symbol_checked", 0) for r in research))
                              if sum(r.get("symbol_checked", 0) for r in research) else None,
         "invented_paths": sum(r.get("invented_paths", 0) for r in research),
+        "not_found_honest_rate": _rate(research, "honest_not_found"),
+        "n_not_found": sum(r.get("honest_not_found") is not None for r in research),
         "errors": sum(1 for r in rows if r.get("error")),
         **cost_summary(research),  # cost of the RESEARCH questions only, so it compares with single_agent
     }
@@ -211,6 +218,9 @@ def print_summary(title: str, s: dict) -> None:
         if "invented_paths" in s:
             print(f"Invented file paths: {s['invented_paths']}  (made-up files the app caught and labelled "
                   f"'not found' - not counted in the line above)")
+        if s.get("n_not_found"):
+            print(f"Not-in-repo honest : {_pct(s['not_found_honest_rate'])}  ({s['n_not_found']} questions about "
+                  f"things the repo doesn't have; pass = no made-up file named)")
     if s.get("avg_tokens") is not None:
         print(f"Cost per question  : {s['avg_tokens']:.0f} tokens, {s['avg_llm_calls']:.1f} model calls, "
               f"{s['avg_seconds']:.0f}s ({s['avg_llm_seconds']:.0f}s of that the model was working; "
@@ -238,7 +248,8 @@ if __name__ == "__main__":
         disable_lesson_recall()
 
     mode = parse_mode(sys.argv)
-    items = questions_for(repo)
+    holdout = "--holdout" in sys.argv
+    items = questions_for(repo, holdout)
     done, resumed = {}, None
     if "--resume" in sys.argv and sys.argv.index("--resume") + 1 < len(sys.argv):
         resumed = sys.argv[sys.argv.index("--resume") + 1]
@@ -255,9 +266,11 @@ if __name__ == "__main__":
     if resumed:
         summary["resumed_from"] = Path(resumed).name  # rows from two days: models/quota may differ
     summary["lessons_used"] = not no_lessons and "--clear-lessons" not in sys.argv
+    summary["questions"] = "holdout" if holdout else "main"
     print_summary(f"CodeAtlas eval - {repo} ({mode} mode)", summary)
 
     RESULTS_DIR.mkdir(exist_ok=True)
-    out = RESULTS_DIR / results_name(repo, mode, time.strftime('%Y%m%d-%H%M%S'))
+    # "codeatlas-holdout-..." so compare_setups and baseline (which glob "codeatlas-2*") never mix it in
+    out = RESULTS_DIR / results_name(f"{repo}-holdout" if holdout else repo, mode, time.strftime('%Y%m%d-%H%M%S'))
     out.write_text(json.dumps({"summary": summary, "rows": rows}, indent=2))
     print(f"\nSaved detailed results to {out}")

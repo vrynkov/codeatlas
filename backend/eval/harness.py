@@ -240,6 +240,10 @@ def score_item(item: dict, r: RunResult, repo: str | None = None) -> dict:
         # Made-up file paths the app caught and labelled before showing the answer. They never
         # reach the citation check above, so they're counted here to keep that 100% honest.
         "invented_paths": r.final.count(NOT_FOUND_LABEL),
+        # "Is X in this repo?" questions whose honest answer is "no". A proxy, not a judge: the answer
+        # passes if it names no made-up file. It can't catch a false claim that cites a REAL file.
+        "honest_not_found": (not r.error and r.final.count(NOT_FOUND_LABEL) == 0)
+                            if item.get("expected_not_found") else None,
         **(check_citations(r.final, repo) if repo else {}),
     })
     return out
