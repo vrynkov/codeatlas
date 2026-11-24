@@ -8,6 +8,7 @@ from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from langchain_core.messages import AIMessage, ToolMessage
 
 from app import config
 from app.agents import team
@@ -161,3 +162,84 @@ def test_eval_mode_flag_and_file_names():
         parse_mode(["codeatlas", "--mode", "solo"])
     assert results_name("codeatlas", "team", "20261120-1200") == "codeatlas-20261120-1200.json"
     assert results_name("codeatlas", "single", "20261120-1200") == "codeatlas-mode-single-20261120-1200.json"
+
+
+# ---------- found by the 2026-11-23 single-mode eval run ----------
+class CrashingResearchGraph:
+    """The Researcher's model call fails (e.g. a Groq rate limit), optionally after one search."""
+    def __init__(self, search_first=False):
+        self.search_first = search_first
+
+    def stream(self, inputs, config=None, stream_mode=None):
+        FakeResearchGraph.runs += 1
+        if self.search_first:
+            call = {"name": "search_code", "args": {"query": "retry"}, "id": "c1"}
+            yield {"agent": {"messages": [AIMessage(content="", tool_calls=[call])]}}
+            yield {"tools": {"messages": [ToolMessage(content="--- src/retry.py (lines 1-9)\ndef retry(): ...",
+                                                      tool_call_id="c1")]}}
+        raise RuntimeError("Groq long (non-daily) rate limit hit; try again in ~1.5 min.")
+
+
+def test_researcher_crash_with_nothing_read_fails_the_question_instead_of_a_fake_answer(lesson_store, monkeypatch):
+    # The real run answered "the repository does not contain any rate-limiting code" - because the
+    # Researcher had crashed before reading anything, not because the code wasn't there.
+    monkeypatch.setattr(team, "build_graph", lambda repo, llm, prompt: CrashingResearchGraph())
+    writer = writer_llm()
+    with pytest.raises(RuntimeError, match="rate limit"):
+        run_single(writer)
+    assert "EXPLAINER" not in writer.roles()                    # nothing was written from no evidence
+
+
+def test_eval_marks_a_researcher_crash_as_an_error_even_when_an_answer_came_out(lesson_store, monkeypatch):
+    monkeypatch.setattr(team, "build_graph", lambda repo, llm, prompt: CrashingResearchGraph(search_first=True))
+    r = run_one("demo", ITEM, llm=writer_llm(), mode="single")
+    assert r.final                                               # partial evidence -> still an answer
+    assert r.error.startswith("Researcher error:") and "rate limit" in r.error
+
+
+def test_researcher_that_never_searched_is_told_to_search_once(lesson_store, monkeypatch):
+    class NoSearchFirst:
+        tasks = []
+
+        def stream(self, inputs, config=None, stream_mode=None):
+            NoSearchFirst.tasks.append(inputs["messages"][0].content)
+            if len(NoSearchFirst.tasks) == 1:  # answers from general knowledge, no tool call
+                yield {"agent": {"messages": [AIMessage(content="FINDINGS: answers are retried when bad")]}}
+            else:
+                yield from FakeResearchGraph().stream(inputs)
+    monkeypatch.setattr(team, "build_graph", lambda repo, llm, prompt: NoSearchFirst())
+    events, _ = run_single(writer_llm())
+    assert len(NoSearchFirst.tasks) == 2 and "call search_code first" in NoSearchFirst.tasks[1]
+    assert any(e["agent"] == "researcher" and e["type"] == "retry" for e in events)
+    assert final_answer(events) != team.OFF_TOPIC_REPLY
+
+
+CODEATLAS_FILES = {"backend/app/agents/team.py", "backend/app/memory/lessons.py", "backend/app/main.py"}
+
+
+def test_question_naming_a_repo_module_is_not_refused(lesson_store, monkeypatch):
+    # The real run refused this as off-topic (no code-shaped word, and the model said "chat").
+    monkeypatch.setattr(team, "real_files", lambda repo: CODEATLAS_FILES)
+    writer = writer_llm()
+    writer.replies["SUPERVISOR"] = ['{"route": "chat", "reason": "general question"}']
+    events, _ = run_single(writer, question="How does the team reuse what worked on earlier, similar questions?")
+    assert FakeResearchGraph.runs == 1
+    route = next(e["text"] for e in events if e["type"] == "route")
+    assert route.startswith("research") and "team" in route
+
+
+@pytest.mark.parametrize("question", ["Who won the football match last night?", "hey there!",
+                                      "what is the main reason people buy cars?"])  # "main" is too generic
+def test_off_topic_questions_are_still_refused_with_module_names_known(lesson_store, monkeypatch, question):
+    monkeypatch.setattr(team, "real_files", lambda repo: CODEATLAS_FILES)
+    writer = FakeLLM({"SUPERVISOR": ['{"route": "chat", "reason": "off topic"}']})
+    events, _ = run_single(writer, question=question)
+    assert FakeResearchGraph.runs == 0
+    assert final_answer(events) == team.OFF_TOPIC_REPLY
+
+
+def test_module_words_match_singular_and_plural(monkeypatch):
+    monkeypatch.setattr(team, "real_files", lambda repo: CODEATLAS_FILES)
+    assert team.module_words_in("Where is a lesson saved?", "x") == ["lesson"]
+    assert team.module_words_in("What do the teams do?", "x") == ["teams"]
+    assert team.module_words_in("What does main do?", "x") == []  # generic file names never count

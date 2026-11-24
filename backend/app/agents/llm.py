@@ -193,7 +193,7 @@ class MultiModelChatGroq:
                 result = self._client_for(idx).invoke(messages, **kwargs)
             except Exception as e:
                 log.info("llm_call_failed", model=model, error_type=type(e).__name__,
-                         duration_ms=round((time.perf_counter() - start) * 1000))
+                         error=str(e)[:300], duration_ms=round((time.perf_counter() - start) * 1000))
                 raise
             usage = getattr(result, "usage_metadata", None) or {}
             span.set_attribute("llm.input_tokens", usage.get("input_tokens", 0))
@@ -278,7 +278,7 @@ class MultiModelChatGroq:
                         last_err, jump_to = e, back_idx
                         break
                     elif wait is None:
-                        log.error("request_too_large", model=self.models[idx])
+                        log.error("request_too_large", model=self.models[idx], error=text[:300])
                         # No parseable "try again in Xs" - this ISN'T a normal throttle that
                         # clears with time (e.g. Groq's "request too large for this model's
                         # per-minute output limit" error: the SAME request will fail identically
@@ -289,7 +289,8 @@ class MultiModelChatGroq:
                         raise RuntimeError(
                             f"{self.models[idx]} couldn't handle this specific request right now "
                             f"(likely too large for its per-minute output limit), and no other "
-                            f"configured model is available. Try a shorter or more specific question."
+                            f"configured model is available. Try a shorter or more specific question. "
+                            f"[Groq said: {text[:300]}]"  # our guess above can be wrong: keep the real reason
                         ) from e
                     else:
                         raise  # a genuine short-term throttle WITH a real wait time, just no

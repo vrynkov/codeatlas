@@ -166,9 +166,11 @@ def test_a_too_large_model_is_not_waited_for(fake_groq):
     failures, log = fake_groq
     a, b, c = llm.MODEL_CHAIN
     failures[a], failures[b], failures[c] = TOO_LARGE, TOO_LARGE, TOO_LARGE
-    with pytest.raises(RuntimeError, match="couldn't handle this specific request"):
+    with pytest.raises(RuntimeError, match="couldn't handle this specific request") as err:
         llm.get_llm().invoke([HumanMessage("explain")])
     assert log == [a, b, c]
+    # Our "likely too large" is a guess: Groq's own words must be in the error, so a run can be diagnosed.
+    assert "Groq said: " + TOO_LARGE[:40] in str(err.value)
 
 
 def test_a_per_minute_wait_just_over_30s_is_waited_not_a_crash(monkeypatch):
