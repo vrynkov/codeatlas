@@ -190,6 +190,31 @@ def repo_terms_in(question: str, repo_name: str, limit: int = 3) -> list[str]:
     return hits[:limit]
 
 
+# File names too generic to say anything about a question ("main", "index", "test"...).
+_GENERIC_STEMS = {"main", "index", "app", "init", "setup", "utils", "util", "test", "tests", "config",
+                  "base", "types", "common", "core", "helpers", "readme", "conftest", "settings"}
+_WORD = re.compile(r"[a-z]{4,}")
+
+
+def module_words_in(question: str, repo_name: str, limit: int = 3) -> list[str]:
+    """Plain words of the question that are the name of one of the repo's files ("team" -> team.py,
+    "lessons" -> lessons.py). Free: no model call. Used only to overrule a "chat" route: a question
+    that names a module of the repo is about the repo. Plain words alone can't ROUTE a question to
+    research in single mode (see repo_terms_in): they only stop a wrong refusal.
+    Example, this repo: "How does the team reuse what worked on earlier questions?" -> ["team"]."""
+    stems = set()
+    for f in real_files(repo_name):
+        stem = f.rsplit("/", 1)[-1].split(".", 1)[0].lower()
+        if len(stem) >= 4 and stem not in _GENERIC_STEMS:
+            stems.add(stem)
+    hits = []
+    for w in dict.fromkeys(_WORD.findall(question.lower())):
+        for cand in (w, w + "s", w[:-1] if w.endswith("s") else None):  # lesson <-> lessons
+            if cand and cand in stems and w not in hits:
+                hits.append(w)
+    return hits[:limit]
+
+
 _LOOKUP_MAX_LINES = 60
 
 
@@ -309,6 +334,10 @@ def build_team_graph(repo_name: str, llm, critic_llm=None, mode: str = "team"):
             hits = repo_terms_in(state["question"], repo_name)
             if hits:
                 route, reason = "research", f"overruled 'chat': the repo mentions {', '.join(hits)}"
+            elif files := module_words_in(state["question"], repo_name):
+                # A real run refused "How does the team reuse what worked on earlier, similar
+                # questions?" as off-topic, in a repo with team.py and lessons.py.
+                route, reason = "research", f"overruled 'chat': the repo has a file named {', '.join(files)}"
         _emit("supervisor", "route", f"{route}  ({reason})")
         return {"route": route}
 
@@ -353,26 +382,43 @@ def build_team_graph(repo_name: str, llm, critic_llm=None, mode: str = "team"):
         files = set(state["files"])
         evidence += [h["text"] for h in lookup]  # the Explainer (and Critic) see the definition too
         files.update(h["file"] for h in lookup)
-        try:
-            for update in graph.stream({"messages": [HumanMessage(task)]},
-                                       {"recursion_limit": MAX_AGENT_STEPS * 2 + 1}, stream_mode="updates"):
-                for node, data in update.items():
-                    for msg in data["messages"]:
-                        if node == "agent" and getattr(msg, "tool_calls", None):
-                            for tc in msg.tool_calls:
-                                _emit("researcher", "act", f"{tc['name']}({tc['args']})")
-                                if tc["name"] == "get_file":
-                                    files.add(str(tc["args"].get("path", "")))
-                        elif node == "tools":
-                            evidence.append(msg.content)
-                            _emit("researcher", "observe", f"{len(msg.content)} characters")
-                        else:
-                            findings = msg.content
-        except GraphRecursionError:
-            findings = findings or "(the researcher ran out of steps)"
-        except Exception as e:  # noqa: BLE001  keep going with whatever evidence we have
-            _emit("researcher", "error", f"{type(e).__name__}: {str(e)[:150]}")
-            findings = findings or "(the researcher failed; answer only from the evidence)"
+        searched, failed = 0, False  # tool results this attempt got back; did the agent crash?
+        for run in range(2):
+            try:
+                for update in graph.stream({"messages": [HumanMessage(task)]},
+                                           {"recursion_limit": MAX_AGENT_STEPS * 2 + 1}, stream_mode="updates"):
+                    for node, data in update.items():
+                        for msg in data["messages"]:
+                            if node == "agent" and getattr(msg, "tool_calls", None):
+                                for tc in msg.tool_calls:
+                                    _emit("researcher", "act", f"{tc['name']}({tc['args']})")
+                                    if tc["name"] == "get_file":
+                                        files.add(str(tc["args"].get("path", "")))
+                            elif node == "tools":
+                                evidence.append(msg.content)
+                                searched += 1
+                                _emit("researcher", "observe", f"{len(msg.content)} characters")
+                            else:
+                                findings = msg.content
+            except GraphRecursionError:
+                findings = findings or "(the researcher ran out of steps)"
+            except Exception as e:  # noqa: BLE001
+                _emit("researcher", "error", f"{type(e).__name__}: {str(e)[:300]}")
+                if not evidence:
+                    # Nothing was read at all. Letting the Explainer write anyway produced confident,
+                    # FALSE answers ("the repository does not contain any rate-limiting code") when the
+                    # real cause was a Groq error. Fail the question visibly instead.
+                    raise
+                findings = findings or "(the researcher failed; answer only from the evidence)"
+                failed = True
+            if failed or searched or lookup or run == 1:
+                break
+            # The model answered from general knowledge without reading any code (a real run did this
+            # for "When is an answer sent back for another research attempt?"). One more try, told
+            # plainly that searching is required. Costs extra calls only in this case.
+            _emit("researcher", "retry", "answered without searching the code; asking it to search first")
+            task += ("\n\nYou answered without reading any code. That is not allowed: call search_code "
+                     "first, then base your FINDINGS only on what the tools return.")
         return {"findings": findings, "evidence": evidence, "attempts": state["attempts"] + 1,
                 "files": sorted(f for f in files if f), "lessons_used": lessons_used}
 

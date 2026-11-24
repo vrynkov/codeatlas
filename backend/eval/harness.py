@@ -118,6 +118,10 @@ def _run_team_into(r: RunResult, repo: str, item: dict, llm, mode: str | None = 
                 r.models_used.append(ev["text"])
             elif ev["agent"] == "team" and ev["type"] == "answer":
                 r.final = ev["text"]
+            elif ev["agent"] == "researcher" and ev["type"] == "error":
+                # The Researcher crashed part-way and the answer was written from partial evidence.
+                # Count it as an error so a rate limit can't pass for a plain wrong answer.
+                r.error = r.error or f"Researcher error: {ev['text']}"
     except Exception as e:  # noqa: BLE001  a crash on one question shouldn't stop the eval run
         r.error = f"{type(e).__name__}: {e}"
 
