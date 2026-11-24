@@ -196,6 +196,10 @@ def print_summary(title: str, s: dict) -> None:
         print(f"Cost per question  : {s['avg_tokens']:.0f} tokens, {s['avg_llm_calls']:.1f} model calls, "
               f"{s['avg_seconds']:.0f}s ({s['avg_llm_seconds']:.0f}s of that the model was working; "
               f"the rest is rate-limit waits and tools)")
+    elif s.get("n_crashed_cost"):
+        print("Cost per question  : n/a (no question finished)")
+    if s.get("n_crashed_cost"):
+        print(f"                     ({s['n_crashed_cost']} crashed question(s) left out of the cost average)")
     if s["errors"]:
         print(f"Errors             : {s['errors']}")
 

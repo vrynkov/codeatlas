@@ -77,12 +77,17 @@ def cost_fields(r: RunResult) -> dict:
 
 
 def cost_summary(rows: list[dict]) -> dict:
-    """Average cost per question. Only rows that were measured count (older result files weren't)."""
-    measured_rows = [r for r in rows if r.get("tokens") is not None]
+    """Average cost per question. Only rows that were measured count (older result files weren't),
+    and only questions that FINISHED: a question that crashed half-way (e.g. on a rate limit) used
+    some calls but gave no answer, so averaging it in would mix "cost of an answer" with "cost of a
+    crash". (Seen 2026-11-20: a 1-question run crashed on call 11 and reported "10 calls" per question.)"""
+    measured_rows = [r for r in rows if r.get("tokens") is not None and not r.get("error")]
     def avg(key):
         vals = [r[key] for r in measured_rows if r.get(key) is not None]
         return round(sum(vals) / len(vals), 1) if vals else None
-    return {"n_measured": len(measured_rows), "avg_tokens": avg("tokens"), "avg_llm_calls": avg("llm_calls"),
+    return {"n_measured": len(measured_rows),
+            "n_crashed_cost": sum(1 for r in rows if r.get("tokens") is not None and r.get("error")),
+            "avg_tokens": avg("tokens"), "avg_llm_calls": avg("llm_calls"),
             "avg_seconds": avg("seconds"), "avg_llm_seconds": avg("llm_seconds")}
 
 
