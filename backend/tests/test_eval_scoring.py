@@ -123,7 +123,7 @@ def test_not_in_repo_question_passes_only_without_a_made_up_file(monkeypatch):
             {"agent": "team", "type": "answer", "text": text}]))
         return score_item(NOT_IN_REPO, run_one("demo", NOT_IN_REPO))
 
-    honest = answer("This repo has no login code.")
+    honest = answer("This repo has no login code, so there is no src/auth.py (not found in this repo).")
     made_up = answer("Login lives in src/auth.py (not found in this repo).")
     assert honest["honest_not_found"] is True and made_up["honest_not_found"] is False
     s = summarize([honest, made_up])
@@ -147,3 +147,14 @@ def test_holdout_results_are_not_picked_up_by_compare_setups(tmp_path, monkeypat
         (tmp_path / name).write_text("{}")
     files = compare_setups.find_files("codeatlas", [])
     assert files["team"] is None and files.get("mode_single") is None
+
+
+# Real opening sentences from the 2026-11-24 runs, hand-checked.
+def test_says_not_found_on_real_answers():
+    from eval.harness import says_not_found
+    lbl = " (not found in this repo)"
+    assert says_not_found("**Answer:** The repository does not contain any implementation that hashes passwords.")
+    assert says_not_found(f"**Answer:** There is no Kubernetes deployment manifest; none define a deployment.yaml{lbl}.")
+    assert says_not_found("**Direct answer:** The UI opens a Server-Sent Events stream with `EventSource`.")
+    assert not says_not_found(f"**Answer:** User login and authentication logic lives in src/auth.py{lbl}.")
+    assert not says_not_found(f"**Answer:** User login is handled in the module backend/app/auth/login.py{lbl}.")

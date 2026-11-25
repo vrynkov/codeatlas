@@ -200,6 +200,24 @@ def check_citations(answer: str, repo: str, repo_dir: Path | None = None) -> dic
             "symbol_checked": checked, "symbol_matched": matched, "symbol_mismatches": mismatches}
 
 
+_NEGATION = re.compile(r"\b(?:not|no|none|never|nothing|without)\b|n['’]t\b", re.I)
+
+
+def says_not_found(answer: str) -> bool:
+    """For a question about something the repo doesn't have: False if the answer's FIRST sentence
+    points at a made-up file (the app labelled it "not found") without saying no/not/none - e.g.
+    "Login lives in src/auth.py (not found in this repo)". True otherwise.
+    A proxy, not a judge: it can't catch a false claim that cites a REAL file. Two simpler rules
+    were wrong on real answers: "no made-up file anywhere" failed honest ones ("there is no
+    deployment.yaml"), and "the first sentence says not" failed "The UI uses SSE, not WebSockets"-
+    style answers that open by correcting the question without the word."""
+    text = re.sub(r"^\W*(?:direct\s+|short\s+)?answer\W*", "", answer.strip(), flags=re.I)
+    first = re.split(r"(?<=[.!?])\s|\n\s*\n", text, maxsplit=1)[0]
+    if NOT_FOUND_LABEL not in first:
+        return True
+    return bool(_NEGATION.search(first.replace(NOT_FOUND_LABEL, "")))  # the label itself isn't the model saying "not"
+
+
 def score_item(item: dict, r: RunResult, repo: str | None = None) -> dict:
     """Compares one run against the question's expectations. Two INDEPENDENT checks on purpose:
     the Critic score comes from inside the pipeline; the keyword/file checks are an outside judge,
@@ -240,10 +258,8 @@ def score_item(item: dict, r: RunResult, repo: str | None = None) -> dict:
         # Made-up file paths the app caught and labelled before showing the answer. They never
         # reach the citation check above, so they're counted here to keep that 100% honest.
         "invented_paths": r.final.count(NOT_FOUND_LABEL),
-        # "Is X in this repo?" questions whose honest answer is "no". A proxy, not a judge: the answer
-        # passes if it names no made-up file. It can't catch a false claim that cites a REAL file.
-        "honest_not_found": (not r.error and r.final.count(NOT_FOUND_LABEL) == 0)
-                            if item.get("expected_not_found") else None,
+        # "Is X in this repo?" questions whose honest answer is "no": see says_not_found().
+        "honest_not_found": (not r.error and says_not_found(r.final)) if item.get("expected_not_found") else None,
         **(check_citations(r.final, repo) if repo else {}),
     })
     return out
