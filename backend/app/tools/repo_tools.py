@@ -7,6 +7,7 @@ from langchain_core.tools import tool
 
 from ..config import MAX_TOOL_OUTPUT_CHARS, REPOS_DIR
 from ..logging_setup import get_logger
+from .code_hints import TEST_FILE_NOTE, import_hints, is_test_file
 from .search import RepoNotIndexedError, get_searcher
 
 log = get_logger(__name__)
@@ -49,7 +50,10 @@ def build_tools(repo_name: str):
             preview = "\n".join(body[:11])
             name = m.get("name") or ""
             label = f" {name}" if name else ""  # e.g. " Session.send", so the agent cites the right one
-            out.append(f"--- {m['file']} (lines {m['start_line']}-{m['end_line']}, {m['kind']}{label})\n{preview}")
+            note = f" {TEST_FILE_NOTE}" if is_test_file(m["file"]) else ""
+            hints = import_hints(repo_root, m["file"], preview)
+            out.append(f"--- {m['file']} (lines {m['start_line']}-{m['end_line']}, {m['kind']}{label}){note}\n"
+                       f"{preview}" + (f"\n{hints}" if hints else ""))
         return ("\n\n".join(out) or "No results.")[:MAX_TOOL_OUTPUT_CHARS]
 
     @tool
@@ -82,6 +86,10 @@ def build_tools(repo_name: str):
         header = f"{path} (lines {start}-{end} of {len(lines)})"
         if end < len(lines):
             header += f" - more lines follow; continue with start_line={end + 1}"
-        return header + "\n" + "\n".join(out)
+        if is_test_file(path):
+            header += f"\n{TEST_FILE_NOTE}"
+        body = "\n".join(out)
+        hints = import_hints(repo_root, str(target.relative_to(repo_root)).replace("\\", "/"), body)
+        return header + "\n" + body + (f"\n{hints}" if hints else "")
 
     return [search_code, get_file]
